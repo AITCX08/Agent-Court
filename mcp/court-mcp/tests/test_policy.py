@@ -49,17 +49,20 @@ def _seed(root: Path, project: str, *,
     fed = {
         "enabled": True,
         "expose_roles": expose_roles if expose_roles is not None else ["foreman"],
-        "expose_read": ["foreman"],
     }
     if allow_paths is not None:
         fed["allow_paths"] = allow_paths
     if deny_paths is not None:
         fed["deny_paths"] = deny_paths
 
+    # Pin default_cli to a name that definitely doesn't exist on PATH so
+    # the PR-3 judge predictably falls back to ``llm_judge_failed``. Tests
+    # that want to exercise a real (stubbed) judge live in test_judge.py.
     court_yaml = {
         "project": project,
         "session": f"court-{project}",
         "attach_window": "foreman",
+        "default_cli": "intentionally-missing-cli-for-test-x9z",
         "roles": [{"name": "foreman", "prompt": "foreman.md", "work_dir": "/tmp"}],
         "federation": fed,
     }
@@ -334,17 +337,21 @@ def test_peers_yaml_policy_tier_optional(root_dir):
 # ---------------------------------------------------------------------------
 
 
-def test_e2e_clean_message_lands_in_inbox(project_with_self_peer):
+def test_e2e_clean_message_no_judge_cli_falls_back_pending(project_with_self_peer):
+    """Without a judge CLI on PATH, PR-3's evaluate_with_llm falls back to
+    ``human_required`` (the fail-safe behavior). Tests that exercise the
+    actual auto_pass/human_required branches with a stubbed CLI live in
+    tests/test_judge.py."""
     identity = project_with_self_peer
     app = peer_daemon.make_app("p")
     msg = _signed(identity, body="just a plain review request")
     status, body = _round_trip(app, msg)
     assert status == 200
-    # default tier_b → judge → inbox
-    assert body["decision"] == "judge"
-    assert body["status"] == "accepted"
-    inbox = peer_lib.project_bus_dir("p") / "bob" / "inbox"
-    assert len(list(inbox.glob("*.md"))) == 1
+    # default tier_b → judge → LLM unavailable → llm_judge_failed → human_required
+    assert body["decision"] == "human_required"
+    assert body["tier"] == "llm_judge_failed"
+    pending = peer_lib.project_bus_dir("p") / "bob" / "pending-approval"
+    assert len(list(pending.glob("*.md"))) == 1
 
 
 def test_e2e_keyword_routes_to_pending_approval(project_with_self_peer):
@@ -418,6 +425,11 @@ def test_e2e_attaches_field_is_in_signed_payload(project_with_self_peer):
 
 
 def test_policy_log_jsonl_captures_decision(project_with_self_peer):
+    """Audit log captures the FINAL decision after PR-3 judge refinement —
+    not the intermediate ``judge`` slot. With no LLM CLI present, the
+    refinement falls back to ``human_required`` with tier
+    ``llm_judge_failed``; the reasons array preserves the policy-layer
+    chain plus the failure cause."""
     identity = project_with_self_peer
     app = peer_daemon.make_app("p")
     msg = _signed(identity, body="ok")
@@ -430,6 +442,115 @@ def test_policy_log_jsonl_captures_decision(project_with_self_peer):
     entry = json.loads(lines[0])
     assert entry["from_court"] == "bob"
     assert entry["to"] == "foreman"
-    assert entry["action"] == "judge"
-    assert entry["tier"] == "tier_b"
+    assert entry["action"] == "human_required"
+    assert entry["tier"] == "llm_judge_failed"
     assert isinstance(entry["reasons"], list)
+    # The policy layer's tier-decision reason is preserved through judge.
+    assert any("tier=tier_b" in r for r in entry["reasons"])
+    assert any("llm_judge_failed" in r for r in entry["reasons"])
+
+
+# ---------------------------------------------------------------------------
+# Hardening tests added in response to the multi-model audit:
+# - path traversal in attaches → denied
+# - case-insensitive hardcoded deny matching
+# - non-string attach entries → denied
+# - normalize_attach unit tests
+# - expanded hardcoded deny patterns
+# ---------------------------------------------------------------------------
+
+
+def test_normalize_attach_rejects_traversal():
+    assert policy.normalize_attach("foo/../bar") is None
+    assert policy.normalize_attach("../etc/passwd") is None
+    assert policy.normalize_attach("a/b/../../../c") is None
+
+
+def test_normalize_attach_strips_absolute_prefix():
+    # absolute paths are rendered relative so the deny rule still bites
+    assert policy.normalize_attach("/etc/passwd") == "etc/passwd"
+    assert policy.normalize_attach("~/.ssh/id_rsa") == ".ssh/id_rsa"
+
+
+def test_normalize_attach_handles_backslashes_and_drive():
+    assert policy.normalize_attach("C:\\Users\\alice\\.aws\\creds") == "Users/alice/.aws/creds"
+
+
+def test_normalize_attach_rejects_non_strings():
+    assert policy.normalize_attach(None) is None
+    assert policy.normalize_attach(123) is None
+    assert policy.normalize_attach({"x": 1}) is None
+    assert policy.normalize_attach("") is None
+    assert policy.normalize_attach("   ") is None
+
+
+def test_traversal_attach_short_circuits_to_denied():
+    msg = _msg(attaches=["bus/foreman/inbox/../../identity/priv.key"])
+    d = policy.evaluate(
+        msg, peer_tier="tier_c", policy=policy.PolicyConfig(),
+        allow_paths=["bus/foreman/inbox/**"], deny_paths=[],
+    )
+    assert d.action == "denied"
+    assert d.tier == "hard_rule"
+    assert any("failed normalization" in r for r in d.reasons)
+
+
+def test_case_insensitive_deny_path_match():
+    """`.SSH/ID_RSA` must hit the `**/.ssh/**` rule even on macOS-style
+    case-insensitive paths."""
+    msg = _msg(attaches=[".SSH/ID_RSA"])
+    d = policy.evaluate(
+        msg, peer_tier="tier_c", policy=policy.PolicyConfig(),
+        allow_paths=[], deny_paths=[],
+    )
+    assert d.action == "denied"
+
+
+def test_expanded_hardcoded_paths_match():
+    """Cover several newly added hardcoded patterns at once."""
+    examples = [
+        ".npmrc",
+        ".netrc",
+        ".aws/credentials",
+        "Library/Keychains/login.keychain-db",
+        "etc/shadow",       # was /etc/shadow → "etc/shadow" after normalize
+        "root/.bashrc",
+        "var/lib/docker/aufs/diff/x",
+        "secret.pem",
+        "tls.key",
+        "cert.p12",
+    ]
+    for path in examples:
+        msg = _msg(attaches=[path])
+        d = policy.evaluate(
+            msg, peer_tier="tier_c", policy=policy.PolicyConfig(),
+            allow_paths=[], deny_paths=[],
+        )
+        assert d.action == "denied", f"{path!r} should hit hardcoded deny"
+
+
+def test_non_string_attach_entry_denied():
+    msg = _msg(attaches=[42, "ok.md"])
+    d = policy.evaluate(
+        msg, peer_tier="tier_c", policy=policy.PolicyConfig(),
+        allow_paths=[], deny_paths=[],
+    )
+    assert d.action == "denied"
+
+
+def test_load_policy_clamps_threshold_and_timeout(root_dir):
+    """Bad confidence_threshold / timeout in policy.yaml ↔ court.yaml fall
+    back to safe defaults rather than carrying NaN / negative through the
+    pipeline."""
+    _seed(root_dir, "weird", policy_yaml={"default_tier": "tier_b"})
+    # Inject bad values into court.yaml federation.judge block
+    cyaml_path = peer_lib.project_court_yaml_path("weird")
+    cyaml = yaml.safe_load(cyaml_path.read_text())
+    cyaml["federation"]["judge"] = {
+        "timeout_seconds": "not-a-number",
+        "confidence_threshold": 99.0,
+    }
+    cyaml_path.write_text(yaml.safe_dump(cyaml))
+    fed = peer_lib.load_federation("weird")
+    assert fed.judge.timeout_seconds == 30.0
+    assert fed.judge.confidence_threshold == 1.0   # clamped from 99 → 1.0

@@ -48,15 +48,18 @@ def _seed_project(root: Path, project: str, *, federation_enabled: bool = True,
         fed_block = {
             "enabled": True,
             "expose_roles": expose_roles if expose_roles is not None else ["foreman"],
-            "expose_read": ["foreman"],
         }
         if court_id is not None:
             fed_block["court_id"] = court_id
 
+    # Pin default_cli to a name that definitely doesn't resolve so the
+    # PR-3 judge falls back deterministically; PR-1 tests don't care
+    # which judge branch runs, only that the network layer worked.
     court_yaml = {
         "project": project,
         "session": f"court-{project}",
         "attach_window": "foreman",
+        "default_cli": "intentionally-missing-cli-for-test-x9z",
         "roles": [{"name": "foreman", "prompt": "foreman.md", "work_dir": "/tmp"}],
     }
     if fed_block:
@@ -329,17 +332,24 @@ def _round_trip(app, payload):
 
 
 def test_inbox_accepts_valid_signature(project_with_self_peer, example_project):
+    """PR-1 scope: signature verification + on-disk delivery.
+
+    Post-PR-3 the file's final subdir depends on the judge LLM (or its
+    fallback); this test only cares that signature + role checks passed
+    and a file was written somewhere. The specific routing logic is
+    covered in tests/test_policy.py and tests/test_judge.py.
+    """
     identity = project_with_self_peer
     app = peer_daemon.make_app(example_project)
     msg = _build_signed_msg(identity)
     status, body = _round_trip(app, msg)
 
     assert status == 200, body
-    assert body["status"] == "accepted"
     assert body["id"] == msg["id"]
-    bus = peer_lib.project_bus_dir(example_project) / "bob" / "inbox"
-    files = list(bus.glob("*.md"))
-    assert len(files) == 1
+    # File lives under bus/bob/<some-subdir>/<...>.md
+    bus = peer_lib.project_bus_dir(example_project) / "bob"
+    files = list(bus.glob("*/*.md"))
+    assert len(files) == 1, files
     content = files[0].read_text()
     assert "from_court: bob" in content
     assert "to: foreman" in content
@@ -408,3 +418,229 @@ def test_inbox_rejects_role_not_exposed(root_dir):
     assert status == 403
     assert body["error"] == "role_not_exposed"
     assert body["expose_roles"] == ["foreman"]
+
+
+# ---------------------------------------------------------------------------
+# Hardening tests added in response to the multi-model audit:
+# - replay protection
+# - ts freshness
+# - input type validation
+# - path-component sanitization
+# - malformed base64 in signature
+# - expose_roles default behavior (fail-closed)
+# ---------------------------------------------------------------------------
+
+
+def test_inbox_rejects_replay_of_valid_message(project_with_self_peer, example_project):
+    """A duplicate ``id`` from the same peer is rejected with 409 even
+    though the signature still verifies. Belt-and-suspenders against an
+    attacker who captures a legitimate request and replays it.
+
+    Both POSTs share a single event loop and a single Application —
+    aiohttp doesn't allow an Application to be reused across loops, so
+    we can't just call ``_round_trip`` twice."""
+    identity = project_with_self_peer
+    app = peer_daemon.make_app(example_project)
+    msg = _build_signed_msg(identity)
+
+    async def _replay():
+        import aiohttp
+        from aiohttp.test_utils import TestServer
+        server = TestServer(app)
+        await server.start_server()
+        try:
+            url = f"http://127.0.0.1:{server.port}/inbox"
+            async with aiohttp.ClientSession() as session:
+                async with session.post(url, json=msg) as r1:
+                    s1, b1 = r1.status, await r1.json()
+                async with session.post(url, json=msg) as r2:
+                    s2, b2 = r2.status, await r2.json()
+            return (s1, b1), (s2, b2)
+        finally:
+            await server.close()
+
+    (s1, _), (s2, b2) = asyncio.run(_replay())
+    assert s1 == 200
+    assert s2 == 409
+    assert b2["error"] == "replay_detected"
+    assert b2["id"] == msg["id"]
+
+
+def test_inbox_rejects_stale_ts(project_with_self_peer, example_project):
+    """A signed message with ts more than 5 min away from clock → 400."""
+    identity = project_with_self_peer
+    app = peer_daemon.make_app(example_project)
+    msg = _build_signed_msg(identity)
+    # Backdate ts by 1 hour. Need to re-sign since ts is in SIGNED_FIELDS.
+    msg["ts"] = "2020-01-01T00:00:00+00:00"
+    msg["signature"] = peer_lib.sign_message(msg, identity.priv)
+
+    status, body = _round_trip(app, msg)
+    assert status == 400
+    assert body["error"] == "stale_or_invalid_ts"
+
+
+def test_inbox_rejects_unparseable_ts(project_with_self_peer, example_project):
+    identity = project_with_self_peer
+    app = peer_daemon.make_app(example_project)
+    msg = _build_signed_msg(identity)
+    msg["ts"] = "yesterday-ish"
+    msg["signature"] = peer_lib.sign_message(msg, identity.priv)
+
+    status, body = _round_trip(app, msg)
+    assert status == 400
+
+
+def test_inbox_rejects_bad_field_types(project_with_self_peer, example_project):
+    """Body as object / attaches as string get caught before policy runs."""
+    identity = project_with_self_peer
+    app = peer_daemon.make_app(example_project)
+
+    msg = _build_signed_msg(identity)
+    msg["body"] = {"not": "a string"}     # body must be string
+    msg["signature"] = peer_lib.sign_message(msg, identity.priv)
+    status, body = _round_trip(app, msg)
+    assert status == 400
+    assert body["error"] == "bad_field_types"
+    assert "body" in body["fields"]
+
+
+def test_inbox_rejects_attaches_as_string(project_with_self_peer, example_project):
+    identity = project_with_self_peer
+    app = peer_daemon.make_app(example_project)
+    msg = _build_signed_msg(identity)
+    msg["attaches"] = "not-a-list"
+    msg["signature"] = peer_lib.sign_message(msg, identity.priv)
+    status, body = _round_trip(app, msg)
+    assert status == 400
+    assert "attaches" in body["fields"]
+
+
+def test_inbox_rejects_hostile_court_id(project_with_self_peer, example_project):
+    """A registered peer can't pick a court_id like '../shared' to write
+    outside bus/<peer>/. The daemon catches it as ``unsafe_name``.
+
+    Setup: register a peer whose court_id contains a path-traversal
+    sequence; a real peer would never get accepted into peers.yaml in
+    the first place, but we test that even if they did, the writer
+    refuses."""
+    identity = project_with_self_peer
+    bad_peers = {
+        "peers": [{
+            "name": "Sneaky",
+            "court_id": "../shared",
+            "url": "http://x",
+            "pub_key_fingerprint": identity.fingerprint,
+            "pub_key_b64": identity.pub_b64,
+            "relation": "sibling",
+        }],
+    }
+    peer_lib.project_peers_yaml_path(example_project).write_text(yaml.safe_dump(bad_peers))
+
+    msg = _build_signed_msg(identity, from_court="../shared")
+    app = peer_daemon.make_app(example_project)
+    status, body = _round_trip(app, msg)
+    assert status == 400
+    assert body["error"] == "unsafe_name"
+
+
+def test_inbox_rejects_garbage_base64_signature(project_with_self_peer, example_project):
+    """A non-base64 signature must be a clean 401, not a 500."""
+    identity = project_with_self_peer
+    app = peer_daemon.make_app(example_project)
+    msg = _build_signed_msg(identity)
+    msg["signature"] = "this is definitely not base64!!!"
+    status, body = _round_trip(app, msg)
+    assert status == 401
+    assert body["error"] == "bad_signature"
+
+
+def test_load_federation_defaults_expose_roles_to_foreman(root_dir):
+    """If court.yaml's federation block omits expose_roles, the loader
+    must default to ['foreman'] — never to '[]' which would expose all
+    roles to inbound dispatch in the daemon."""
+    _seed_project(root_dir, "implicit", expose_roles=None)
+    # Drop the expose_roles key entirely so we test the implicit default.
+    p = peer_lib.project_court_yaml_path("implicit")
+    raw = yaml.safe_load(p.read_text())
+    raw["federation"].pop("expose_roles", None)
+    p.write_text(yaml.safe_dump(raw))
+
+    fed = peer_lib.load_federation("implicit")
+    assert fed.expose_roles == ["foreman"]
+
+
+# ---------------------------------------------------------------------------
+# dispatch_to_peer MCP tool — error paths
+# Direct call into server.dispatch_to_peer instead of going over HTTP, so
+# the LLM-facing error surface is verified.
+# ---------------------------------------------------------------------------
+
+
+def test_dispatch_to_peer_unknown_project(root_dir):
+    from server import dispatch_to_peer
+    r = dispatch_to_peer(project="does-not-exist", peer_court_id="x", message="hi")
+    assert r["error"] == "unknown_project"
+    assert r["project"] == "does-not-exist"
+    assert isinstance(r["available"], list)
+
+
+def test_dispatch_to_peer_no_identity(root_dir):
+    from server import dispatch_to_peer
+    _seed_project(root_dir, "no-id")
+    # Don't run keygen for "no-id" → load_identity will raise FileNotFoundError
+    r = dispatch_to_peer(project="no-id", peer_court_id="x", message="hi")
+    assert r["error"] == "no_identity"
+    assert r["project"] == "no-id"
+
+
+def test_dispatch_to_peer_unknown_peer(root_dir):
+    from server import dispatch_to_peer
+    _seed_project(root_dir, "lonely")
+    peer_lib.generate_keypair("lonely")
+    # No peers.yaml written → empty peers list
+    r = dispatch_to_peer(project="lonely", peer_court_id="ghost", message="hi")
+    assert r["error"] == "unknown_peer"
+    assert r["peer_court_id"] == "ghost"
+    assert r["available"] == []
+
+
+def test_dispatch_to_peer_transport_error(root_dir):
+    """Pointing the peer at a closed port returns a clean transport_error
+    dict — never raises."""
+    from server import dispatch_to_peer
+    _seed_project(root_dir, "isolated")
+    identity = peer_lib.generate_keypair("isolated")
+    peer_lib.project_peers_yaml_path("isolated").write_text(yaml.safe_dump({
+        "peers": [{
+            "name": "Bob",
+            "court_id": "bob",
+            "url": "http://127.0.0.1:1",   # port 1 is reserved → connection refused
+            "pub_key_fingerprint": identity.fingerprint,
+            "pub_key_b64": identity.pub_b64,
+            "relation": "child",
+        }],
+    }))
+    r = dispatch_to_peer(project="isolated", peer_court_id="bob", message="hi")
+    assert r["error"] == "transport_error"
+    assert r["project"] == "isolated"
+    assert "id" in r   # the message id is included even on failure
+
+
+def test_explicit_empty_expose_roles_locks_down(root_dir):
+    """An explicit empty list means 'expose nothing' — every role is
+    forbidden, including foreman."""
+    _seed_project(root_dir, "locked", expose_roles=[])
+    identity = peer_lib.generate_keypair("locked")
+    peer_lib.project_peers_yaml_path("locked").write_text(yaml.safe_dump({
+        "peers": [{
+            "name": "Sib", "court_id": "sib", "url": "http://x",
+            "pub_key_fingerprint": identity.fingerprint,
+            "pub_key_b64": identity.pub_b64, "relation": "sibling",
+        }],
+    }))
+    app = peer_daemon.make_app("locked")
+    msg = _build_signed_msg(identity, from_court="sib", to="foreman")
+    status, body = _round_trip(app, msg)
+    assert status == 403
+    assert body["error"] == "role_not_exposed"

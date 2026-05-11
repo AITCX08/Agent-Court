@@ -62,20 +62,34 @@ utility_windows:
 #   court_id: "alice-laptop-example"
 #
 #   # Roles outside peers may dispatch *to*. Anything not listed gets 403.
-#   # Conservative default: only foreman is reachable from outside; foreman
-#   # then routes work internally.
+#   # If this key is omitted entirely, the loader defaults to ["foreman"]
+#   # so foreman is the only externally-reachable role; foreman then
+#   # routes work internally. An explicit empty list locks everything
+#   # down (no inbound dispatch will succeed for any role).
 #   expose_roles:
 #     - foreman
 #
-#   # Roles whose outboxes outside peers may read (used by PR-2 read_peer_inbox).
-#   expose_read:
-#     - foreman
-#
-#   # PR-2 will enforce these against any path referenced in inbound messages.
-#   # Schema is wired in PR-1; enforcement lands with the policy engine.
+#   # PR-2 — paths the policy engine checks any inbound `attaches:` against.
+#   # Allow non-empty + attach not covered → human_required (parked for review).
+#   # Deny match (here OR the hardcoded list in policy.py) → denied (audit only).
 #   allow_paths:
 #     - "bus/foreman/inbox/**"
 #     - "shared/notes-public.md"
 #   deny_paths:
 #     - "prompts/**"
 #     - "shared/notes-private.md"
+#
+#   # PR-3 — LLM judge config. Invoked when the policy engine returns the
+#   # `judge` action (tier_b). The judge sees the full message + policy
+#   # reasons and outputs either auto_pass or human_required.
+#   judge:
+#     # Which CLI to call. Omit to use top-level `default_cli`.
+#     # cli: claude
+#     # Optional --model passed to the CLI.
+#     # model: haiku
+#     # Override the built-in prompt at mcp/court-mcp/prompts/judge.md
+#     # prompt_file: /path/to/custom/judge.md
+#     # Hard timeout. Beyond this → human_required fallback.
+#     timeout_seconds: 30
+#     # auto_pass verdicts below this confidence are upgraded to human_required.
+#     confidence_threshold: 0.6

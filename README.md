@@ -116,7 +116,10 @@ frontmatter to route. Replies set `in_reply_to` to chain a conversation.
 ### Prerequisites
 
 - macOS or Linux
-- `tmux`, `fswatch`, `yq`, `uuidgen` on `$PATH`
+- `tmux`, `fswatch`, `uuidgen` on `$PATH`
+- `yq` — **the Python wrapper around `jq`** (`pip install yq`). The Go
+  `yq` from `mikefarah/yq` has incompatible syntax and breaks the
+  shell scripts in `bin/`.
 - Python 3.10+ (for the MCP server and the federation daemon)
 - An LLM CLI that accepts `--append-system-prompt` and optionally
   `--model`. The default is `claude` (Anthropic's Claude Code), but
@@ -260,16 +263,29 @@ by the policy engine and routed to one of four outcomes:
 
 | Decision | Goes to | When |
 |---|---|---|
-| `auto_pass` | `bus/<peer>/inbox/` | tier_c peer, clean body, paths within allow list |
-| `judge` | `bus/<peer>/inbox/` *(with warning log)* | tier_b peer, clean. PR-3 will replace with LLM judge. |
-| `human_required` | `bus/<peer>/pending-approval/` | tier_a peer, *or* sensitive keyword, *or* attach outside allow_paths |
+| `auto_pass` | `bus/<peer>/inbox/` | tier_c peer, clean body, paths within allow list — *or* PR-3 LLM judge said so on a tier_b message |
+| `human_required` | `bus/<peer>/pending-approval/` | tier_a peer, sensitive keyword, attach outside allow_paths, *or* PR-3 LLM judge upgraded a tier_b message |
 | `denied` | `bus/<peer>/denied/` *(audit only)* | attach matches a deny path. Never reaches foreman. |
+
+PR-3 wired an actual LLM in for tier_b. When policy says `judge`, the
+daemon calls the configured LLM CLI (`default_cli` by default, e.g.
+Claude Code) with a built-in judge system prompt, parses a JSON
+verdict, and applies a confidence threshold. Any failure (CLI not on
+PATH, timeout, unparseable output, low confidence) **fails safe to
+`human_required`** — the receiver is never worse off than they would
+have been without PR-3.
 
 Configuration lives in two files per project:
 
-- **`court.yaml`** (`federation.allow_paths` / `deny_paths`) — path
-  globs that constrain what files an inbound message may reference
-  via its `attaches:` frontmatter field.
+- **`court.yaml`** —
+  - `federation.allow_paths` / `deny_paths` — path globs that
+    constrain what files an inbound message may reference via its
+    `attaches:` frontmatter field.
+  - `federation.judge` — which CLI to invoke for tier_b judgement,
+    optional `model`, optional `prompt_file` override,
+    `timeout_seconds` (default 30), `confidence_threshold`
+    (default 0.6). Falls back to top-level `default_cli` when
+    `judge.cli` is unset.
 - **`policy.yaml`** — `default_tier:` (one of `tier_a`/`tier_b`/`tier_c`)
   + optional `sensitive_keywords:` list appended to the built-in one.
 
@@ -379,11 +395,11 @@ MIT. See [LICENSE](./LICENSE).
 
 ## Status
 
-Early. PR-1 (HTTP + identity + signed dispatch + role whitelist) and
+Early. PR-1 (HTTP + identity + signed dispatch + role whitelist),
 PR-2 (policy engine + path-level allow/deny + sensitive-keyword
-filter + pending-approval bin) are working but lightly tested.
-PR-3 (LLM judge for the `tier_b` / `judge` branch) is next; after
-that, PR-4 (sudo-style temp authorization), PR-5 (multi-channel
-human approval: terminal + FeiShu + WeChat), PR-6 (IM redundancy).
-Bug reports and prompts for new role archetypes welcome — open an
-issue.
+filter + pending-approval bin), and PR-3 (LLM judge for the `tier_b`
+branch, with fail-safe fallback to human_required) are working but
+lightly tested. PR-4 (sudo-style temp authorization) is next; after
+that, PR-5 (multi-channel human approval: terminal + FeiShu +
+WeChat), PR-6 (IM redundancy). Bug reports and prompts for new role
+archetypes welcome — open an issue.

@@ -4,13 +4,11 @@ Walk-through for getting two `agent-court` projects talking on the same
 local network. No public IPs, no VPN — works the moment both machines
 can ping each other on the LAN.
 
-> Status: PR-1 (HTTP + signing + role whitelist) and PR-2 (policy
-> engine + path/keyword gating + pending-approval bin) are live.
-> Still ahead: PR-3 LLM judge, PR-4 sudo-style temp authorization,
-> PR-5 multi-channel human approval (FeiShu/WeChat), PR-6 IM
-> redundancy, and TLS. PR-2's `tier_b → judge` branch currently
-> passes through to inbox with a warning log — it will route to
-> `llm_judge` once PR-3 lands.
+> Status: PR-1 (HTTP + signing + role whitelist), PR-2 (policy
+> engine + path/keyword gating + pending-approval bin), and PR-3
+> (LLM judge with fail-safe fallback) are live. Still ahead: PR-4
+> sudo-style temp authorization, PR-5 multi-channel human approval
+> (FeiShu/WeChat), PR-6 IM redundancy, and TLS.
 
 ## Mental model first
 
@@ -159,9 +157,19 @@ If you federate multiple projects on the same machine, give each its
 own port:
 
 ```bash
-COURT_PEER_BIND=0.0.0.0:8765 court-peer example   &
-COURT_PEER_BIND=0.0.0.0:8766 court-peer client-a  &
+COURT_PEER_BIND=0.0.0.0:8765 nohup court-peer example   > ~/.agent-court/logs/peer-example.log 2>&1 &
+COURT_PEER_BIND=0.0.0.0:8766 nohup court-peer client-a  > ~/.agent-court/logs/peer-client-a.log 2>&1 &
+COURT_PEER_BIND=0.0.0.0:8767 nohup court-peer ops       > ~/.agent-court/logs/peer-ops.log 2>&1 &
 ```
+
+Each project gets a different peer URL (e.g. `http://host:8765` vs
+`http://host:8766`); the remote side puts whichever URL they need
+into their `peers.yaml` entry for that project.
+
+Identities, peers, policies, and bus directories are all
+project-scoped — three daemons on the same host effectively run
+three independent courts, and a remote peer authorized to dispatch
+into `example` cannot in any way reach `client-a` or `ops`.
 
 If federation is disabled in that project's `court.yaml`, the daemon
 refuses to start with a pointer to the config block.
@@ -198,8 +206,22 @@ On Bob's machine the file shows up at:
 ~/.agent-court/projects/example/bus/alice-laptop-example/inbox/1715432400-7f3d2e1a-upstream-to-foreman.md
 ```
 
-Bob's foreman (running under `court-up example`) sees the file via
-court-watcher and reacts.
+Bob still has to surface that file to his foreman manually for now —
+the `court-watcher` daemon only listens on the local roles'
+`*/outbox/` directories, so peer-inbox files sit there until someone
+reads them. The supported workflow today:
+
+```bash
+# On the receiver, periodically:
+ls ~/.agent-court/projects/example/bus/*/inbox/*.md
+# Promote any file you want delivered to the foreman:
+mv .../bus/<peer-court-id>/inbox/<file>.md \
+   .../bus/foreman/inbox/<file>.md
+```
+
+A future PR will teach `court-watcher` to also auto-route peer-inbox
+files into the target role's inbox once the policy decision says
+`auto_pass`.
 
 ## Policy gating (PR-2)
 
@@ -241,6 +263,45 @@ sensitive_keywords:
 ```
 
 If the file is missing the defaults are `tier_b` + no extra keywords.
+
+### Optional: LLM judge (PR-3)
+
+When a message hits the `tier_b → judge` slot the daemon invokes an
+LLM CLI to decide between `auto_pass` and `human_required`. With no
+configuration the daemon uses `claude` (or whatever `default_cli` in
+`court.yaml` is) and a built-in prompt at
+`mcp/court-mcp/prompts/judge.md`.
+
+```yaml
+# ~/.agent-court/projects/example/court.yaml
+default_cli: claude               # also used by the LLM judge
+
+federation:
+  enabled: true
+  judge:
+    # cli: claude                 # override default_cli for the judge only
+    # model: haiku                # --model flag (passes through to the CLI)
+    # prompt_file: /etc/agent-court/strict-judge.md
+    timeout_seconds: 30
+    confidence_threshold: 0.6
+```
+
+The judge's prompt asks for strict JSON:
+
+```
+{"verdict": "auto_pass" | "human_required", "confidence": 0.0-1.0, "reason": "..."}
+```
+
+Anything that goes wrong (CLI missing, timeout, unparseable output,
+confidence below `confidence_threshold`) **fails safe** to
+`human_required`. The exact failure mode is preserved in the
+`policy-log.jsonl` `reasons` array — tail it after suspicious
+deliveries.
+
+Use a custom `prompt_file` to teach the judge about your project's
+specific risk surface (e.g., "treat any reference to billing
+endpoints as human_required"). The built-in prompt is intentionally
+generic.
 
 ### Per-peer tier (in `peers.yaml`)
 
@@ -368,11 +429,31 @@ machine's firewall — most home LANs are wide open already.
 
 - Either the sender's peer entry is `policy_tier: tier_a`, or the
   body triggered a sensitive-keyword match, or an attach landed
-  outside `allow_paths`. The file is in
+  outside `allow_paths`, or the PR-3 LLM judge upgraded an
+  otherwise-passing tier_b message. The file is in
   `bus/<your-court-id>/pending-approval/` on the receiver; a human
   there must `mv` it to `inbox/` to actually deliver.
 - Check the receiver's `logs/policy-log.jsonl` — every decision has a
   `reasons` array explaining which rule fired.
+
+### `tier: llm_judge_failed` showing up in logs
+
+- The PR-3 judge tried to call an LLM CLI and something went wrong.
+  Look at the message's `reasons` array — it pins the exact failure:
+  - `"cli '<x>' not found on PATH"` → install the CLI on the
+    receiver's machine, or point `federation.judge.cli` at one
+    that exists.
+  - `"<x> timed out after Ns"` → the CLI took too long. Either
+    raise `federation.judge.timeout_seconds`, or use a faster
+    model via `federation.judge.model`.
+  - `"<x> exited <n>: ..."` → the CLI errored out (often a quota
+    or auth issue). Run the same command by hand to reproduce.
+  - `"no JSON object found in LLM output"` / `"verdict must be
+    ..."` → the model drifted off the JSON contract. Tighten the
+    prompt or switch model.
+- All of these collapse to `human_required` — so a misconfigured
+  judge never *delivers* messages; it just over-flags them. Fix at
+  your leisure.
 
 ### `list_peers` shows `reachable: false`
 

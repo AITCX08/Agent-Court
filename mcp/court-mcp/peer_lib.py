@@ -17,11 +17,15 @@ tests with monkeypatched env.
 from __future__ import annotations
 
 import base64
+import binascii
 import fnmatch
 import hashlib
 import json
+import math
 import os
+import re
 import socket
+import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -33,6 +37,102 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import (
     Ed25519PrivateKey,
     Ed25519PublicKey,
 )
+
+
+# ---------------------------------------------------------------------------
+# Input-sanitization helpers (used by inbox handler + bus writer)
+# ---------------------------------------------------------------------------
+
+# court_id / role names / message ids that show up as path components on disk
+# must be tightly constrained — they originate from an authenticated peer
+# but a malicious-yet-registered peer could otherwise pick a value like
+# "../shared" and escape ``bus/<peer>/``.
+_SAFE_NAME = re.compile(r"^[A-Za-z0-9._-]{1,128}$")
+
+
+class UnsafeNameError(ValueError):
+    """Raised when a peer-controlled string is not safe to use as a filesystem
+    path component. Caller is expected to reject the inbound request."""
+
+
+def assert_safe_path_component(value, *, field_name: str) -> str:
+    """Return ``value`` unchanged if it is a single safe name, else raise.
+
+    A "safe name" is 1–128 chars of ``[A-Za-z0-9._-]``, excluding ``.`` and
+    ``..``. These rules apply to ``court_id``, role names, and message ids
+    — anything that ends up as a directory or filename segment under
+    ``bus/``.
+    """
+    if not isinstance(value, str):
+        raise UnsafeNameError(f"{field_name!r} must be a string, got {type(value).__name__}")
+    if value in (".", ".."):
+        raise UnsafeNameError(f"{field_name!r} cannot be '.' or '..'")
+    if not _SAFE_NAME.match(value):
+        raise UnsafeNameError(
+            f"{field_name!r}={value!r} contains characters outside "
+            f"[A-Za-z0-9._-] or exceeds 128 chars"
+        )
+    return value
+
+
+# ---------------------------------------------------------------------------
+# Replay protection
+# ---------------------------------------------------------------------------
+
+class ReplayCache:
+    """In-memory ``id`` cache to reject duplicate inbound messages.
+
+    Bounded size + TTL so it never grows unboundedly. Restarts lose state,
+    which is fine because the ``ts`` freshness window below makes a stored
+    message un-replayable past that window anyway — restart only widens
+    the gap to that window.
+    """
+
+    def __init__(self, ttl_seconds: int = 600, max_entries: int = 10_000):
+        self._ttl = ttl_seconds
+        self._max = max_entries
+        self._seen: dict[str, float] = {}
+
+    def check_and_add(self, msg_id: str) -> bool:
+        """Return True if this id is fresh; False if it has been seen."""
+        now = time.monotonic()
+        # Prune expired entries opportunistically.
+        if self._seen:
+            cutoff = now
+            stale = [k for k, exp in self._seen.items() if exp <= cutoff]
+            for k in stale:
+                del self._seen[k]
+        if msg_id in self._seen:
+            return False
+        # Cap size: evict an arbitrary entry (dict iteration order = insertion).
+        if len(self._seen) >= self._max:
+            try:
+                oldest_key = next(iter(self._seen))
+                del self._seen[oldest_key]
+            except StopIteration:
+                pass
+        self._seen[msg_id] = now + self._ttl
+        return True
+
+
+def ts_is_fresh(iso_ts, *, window_seconds: int = 300) -> bool:
+    """Return True if the message's ``ts`` field is within ±``window`` of now.
+
+    Rejects non-strings, unparseable strings, and naive timestamps without
+    timezone info (we don't know which clock they're on). The window is
+    symmetric — a clock 4 minutes ahead is still accepted.
+    """
+    if not isinstance(iso_ts, str):
+        return False
+    try:
+        msg_time = datetime.fromisoformat(iso_ts)
+    except ValueError:
+        return False
+    if msg_time.tzinfo is None:
+        return False
+    now = datetime.now(timezone.utc)
+    delta = abs((now - msg_time).total_seconds())
+    return delta <= window_seconds
 
 
 # ---------------------------------------------------------------------------
@@ -204,12 +304,22 @@ def sign_message(msg: dict, priv: Ed25519PrivateKey) -> str:
     return base64.b64encode(sig).decode()
 
 
-def verify_signature(msg: dict, signature_b64: str, sender_pub_b64: str) -> bool:
-    pub = Ed25519PublicKey.from_public_bytes(base64.b64decode(sender_pub_b64))
+def verify_signature(msg: dict, signature_b64, sender_pub_b64) -> bool:
+    """Verify ``signature_b64`` against the canonical payload of ``msg``.
+
+    Returns False (never raises) for *any* failure: bad base64, wrong key
+    length, signature mismatch, non-string inputs. The caller treats False
+    as "401 bad signature" — we deliberately don't distinguish "malformed
+    sig" from "wrong key" since both mean the same thing to the peer.
+    """
+    if not isinstance(signature_b64, str) or not isinstance(sender_pub_b64, str):
+        return False
     try:
-        pub.verify(base64.b64decode(signature_b64), canonical_payload(msg))
+        sig_bytes = base64.b64decode(signature_b64, validate=True)
+        pub = Ed25519PublicKey.from_public_bytes(base64.b64decode(sender_pub_b64, validate=True))
+        pub.verify(sig_bytes, canonical_payload(msg))
         return True
-    except InvalidSignature:
+    except (InvalidSignature, binascii.Error, ValueError, TypeError):
         return False
 
 
@@ -218,13 +328,35 @@ def verify_signature(msg: dict, signature_b64: str, sender_pub_b64: str) -> bool
 # ---------------------------------------------------------------------------
 
 @dataclass
+class JudgeConfig:
+    """PR-3 — config for the LLM judge invoked on policy `judge` decisions.
+
+    All fields are optional. ``cli``/``model``/``prompt_file`` = None means
+    "fall back to a sensible default": ``cli`` falls back to court.yaml's
+    top-level ``default_cli``; ``model`` is left as the CLI's own default;
+    ``prompt_file`` falls back to the built-in
+    ``mcp/court-mcp/prompts/judge.md``.
+    """
+    cli: Optional[str] = None
+    model: Optional[str] = None
+    prompt_file: Optional[str] = None
+    timeout_seconds: float = 30.0
+    confidence_threshold: float = 0.6
+
+
+@dataclass
 class FederationConfig:
     enabled: bool = False
     court_id: str = ""
-    expose_roles: list[str] = field(default_factory=list)        # roles outside peers may dispatch to
-    expose_read: list[str] = field(default_factory=list)         # roles outside peers may read outboxes of
+    # Roles outside peers may dispatch *to*. Missing in YAML → fail-closed
+    # to ``["foreman"]`` so a misconfigured court doesn't accidentally
+    # accept inbound dispatches to every role. An explicit empty list
+    # means "expose nothing" and locks the daemon down completely.
+    expose_roles: list[str] = field(default_factory=lambda: ["foreman"])
     allow_paths: list[str] = field(default_factory=list)         # glob whitelist (PR-2 enforces)
     deny_paths: list[str] = field(default_factory=list)          # glob blacklist (PR-2 enforces)
+    judge: JudgeConfig = field(default_factory=JudgeConfig)      # PR-3 LLM judge config
+    default_cli: str = "claude"                                   # court.yaml top-level — used when judge.cli is unset
 
 
 def _default_court_id(project: str) -> str:
@@ -248,13 +380,58 @@ def load_federation(project: str) -> FederationConfig:
 
     block = raw.get("federation") or {}
     enabled = bool(block.get("enabled", False))
+    judge = _parse_judge_config(block.get("judge") or {})
+
+    # expose_roles defaulting:
+    # - key missing from YAML → fail-closed to ["foreman"]
+    # - explicit empty list   → respect the user; no role exposed (locks down)
+    raw_expose = block.get("expose_roles")
+    if raw_expose is None:
+        expose_roles = ["foreman"]
+    else:
+        expose_roles = [str(r) for r in raw_expose]
+
     return FederationConfig(
         enabled=enabled,
         court_id=block.get("court_id") or _default_court_id(project),
-        expose_roles=list(block.get("expose_roles") or []),
-        expose_read=list(block.get("expose_read") or []),
+        expose_roles=expose_roles,
         allow_paths=list(block.get("allow_paths") or []),
         deny_paths=list(block.get("deny_paths") or []),
+        judge=judge,
+        default_cli=str(raw.get("default_cli") or "claude"),
+    )
+
+
+def _parse_judge_config(judge_block: dict) -> JudgeConfig:
+    """Build a JudgeConfig from the raw YAML dict, clamping invalid values
+    to safe defaults so a misconfigured judge can't silently break the
+    fail-safe escape hatch."""
+    raw_timeout = judge_block.get("timeout_seconds", 30)
+    try:
+        timeout = float(raw_timeout)
+        if not math.isfinite(timeout) or timeout <= 0:
+            timeout = 30.0
+    except (TypeError, ValueError):
+        timeout = 30.0
+
+    raw_threshold = judge_block.get("confidence_threshold", 0.6)
+    try:
+        threshold = float(raw_threshold)
+        if not math.isfinite(threshold):
+            threshold = 0.6
+        else:
+            # Clamp to [0, 1]; values outside this range don't have a
+            # well-defined meaning for the upgrade check.
+            threshold = max(0.0, min(1.0, threshold))
+    except (TypeError, ValueError):
+        threshold = 0.6
+
+    return JudgeConfig(
+        cli=judge_block.get("cli"),
+        model=judge_block.get("model"),
+        prompt_file=judge_block.get("prompt_file"),
+        timeout_seconds=timeout,
+        confidence_threshold=threshold,
     )
 
 
@@ -388,11 +565,19 @@ def write_inbound_to_bus(
     The existing ``court-watcher`` only inspects ``*/outbox/*.md`` files,
     so writing into ``inbox`` / ``pending-approval`` / ``denied`` here
     does not double-route through the watcher.
+
+    Raises :class:`UnsafeNameError` if any field that becomes a path
+    component (``from_court``, ``from``, ``to``, ``id``) contains
+    characters outside ``[A-Za-z0-9._-]`` or is ``.`` / ``..``. Caller
+    should turn that into a 400 rejection — the message has cleared
+    signature + role checks so the field values are authenticated, but
+    a malicious-yet-registered peer could still pick a hostile name.
     """
-    from_court = msg["from_court"]
-    msg_id = msg["id"]
-    sender_role = msg.get("from", from_court)
-    to_role = msg["to"]
+    from_court = assert_safe_path_component(msg["from_court"], field_name="from_court")
+    msg_id = assert_safe_path_component(msg["id"], field_name="id")
+    raw_sender = msg.get("from", from_court)
+    sender_role = assert_safe_path_component(raw_sender, field_name="from")
+    to_role = assert_safe_path_component(msg["to"], field_name="to")
     ts_epoch = int(datetime.now().timestamp())
     fname = f"{ts_epoch}-{msg_id}-{sender_role}-to-{to_role}.md"
 

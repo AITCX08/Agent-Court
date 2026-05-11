@@ -58,6 +58,8 @@ from __future__ import annotations
 
 import fnmatch
 import json
+import posixpath
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Iterable, Optional
@@ -71,18 +73,42 @@ import yaml
 
 # Paths that no policy.yaml can re-allow. These are common locations for
 # system secrets; if an inbound peer message attaches one of these we treat
-# it as a deliberate attempt to exfiltrate.
+# it as a deliberate attempt to exfiltrate. Patterns are matched
+# case-insensitively against a normalized POSIX path with `..` segments
+# and absolute leading slashes already stripped — see ``_match_any``.
 HARDCODED_DENY_PATHS: tuple[str, ...] = (
-    "/etc/**",
+    # OS-level secret bundles
+    "etc/**",                          # /etc/* (leading / stripped after normalize)
+    "root/**",                         # /root/*
+    "var/lib/docker/**",
+    "var/run/docker.sock",
+    # User ssh / GPG
     "**/.ssh/**",
     "**/id_rsa*",
     "**/id_ed25519*",
+    "**/.gnupg/**",
+    # Environment / shell secrets
     "**/.env",
     "**/.env.*",
+    "**/.netrc",
+    "**/.npmrc",
+    "**/.pypirc",
+    "**/.dockercfg",
     "**/credentials.json",
     "**/secrets/**",
+    # Cloud SDKs
     "**/.aws/**",
+    "**/.azure/**",
+    "**/.gcp/**",
+    "**/.config/gcloud/**",
     "**/.kube/config",
+    # Generic key file extensions
+    "**/*.pem",
+    "**/*.key",
+    "**/*.p12",
+    "**/*.pfx",
+    # macOS keychains
+    "**/Library/Keychains/**",
 )
 
 # Substrings (case-insensitive) whose appearance in ``body`` forces a
@@ -160,10 +186,80 @@ def load_policy(project: str) -> PolicyConfig:
 # Evaluation
 # ---------------------------------------------------------------------------
 
+# Windows drive prefix like "C:" — treated as absolute and rejected.
+_WINDOWS_DRIVE_RE = re.compile(r"^[A-Za-z]:")
+
+
+def normalize_attach(path) -> Optional[str]:
+    """Canonicalize an ``attaches`` entry; return ``None`` if it is unsafe
+    enough that we shouldn't even try to match it against globs.
+
+    Rules:
+    - non-strings, empty strings: reject
+    - absolute paths (``/``, ``~``, ``\\``, ``C:``): strip the prefix and
+      treat the remainder as relative — that way ``/etc/passwd`` still
+      matches the hardcoded ``etc/**`` pattern, but the path *as written*
+      can never escape ``bus/``
+    - paths whose normalized form contains any ``..`` segment: reject
+      entirely (no honest workflow needs to escape upward and we'd
+      rather over-flag than parse upward references)
+    - backslashes are converted to forward slashes so a Windows-style
+      path can't slip past a posix glob
+    """
+    if not isinstance(path, str) or not path.strip():
+        return None
+    cleaned = path.replace("\\", "/").strip()
+
+    # Strip leading absolute markers; remaining path is treated as
+    # relative for matching purposes.
+    while cleaned.startswith(("/", "~")):
+        cleaned = cleaned[1:]
+    if _WINDOWS_DRIVE_RE.match(cleaned):
+        cleaned = cleaned[2:].lstrip("/")
+    if not cleaned:
+        return None
+
+    # posixpath.normpath collapses ``a/./b`` → ``a/b`` and ``a/b/../c`` →
+    # ``a/c``. We use that to detect *whether* the original path tried to
+    # walk upward; we don't trust the collapsed form to be safe because a
+    # path can normalize cleanly yet still have *intended* upward reach
+    # like ``foo/../../bar``. Easier rule: reject anything that has any
+    # ``..`` component in the un-normalized split.
+    parts = [p for p in cleaned.split("/") if p not in ("", ".")]
+    if not parts or any(p == ".." for p in parts):
+        return None
+
+    return "/".join(parts)
+
+
 def _match_any(path: str, patterns: Iterable[str]) -> Optional[str]:
-    """Return the first pattern that matches ``path``, else None."""
+    """Return the first pattern that matches ``path``, else None.
+
+    Matching is case-insensitive on lowercase strings so a deny rule
+    like ``**/.ssh/**`` catches both ``.ssh/id_rsa`` and ``.SSH/ID_RSA``
+    regardless of the host filesystem's case sensitivity.
+
+    ``fnmatch`` doesn't natively understand the globstar ``**`` meaning
+    "zero or more path segments" — its ``**`` is just two ``*`` in a
+    row. We compensate by also testing the pattern with leading ``**/``
+    and trailing ``/**`` stripped, which between them cover the common
+    "match at any depth" intent (``**/.npmrc`` should also catch
+    ``.npmrc`` at the root; ``etc/**`` should also catch the bare
+    ``etc`` directory name).
+    """
+    lowered = path.lower()
     for pat in patterns:
-        if fnmatch.fnmatch(path, pat):
+        pat_l = pat.lower()
+        # 1. Direct fnmatch against the full path.
+        if fnmatch.fnmatchcase(lowered, pat_l):
+            return pat
+        # 2. Strip leading ``**/`` and retry — handles "no segment before
+        #    the named suffix" (e.g. ``.npmrc`` against ``**/.npmrc``).
+        if pat_l.startswith("**/") and fnmatch.fnmatchcase(lowered, pat_l[3:]):
+            return pat
+        # 3. Strip trailing ``/**`` and retry — handles "bare directory
+        #    name" (e.g. ``etc`` against ``etc/**``).
+        if pat_l.endswith("/**") and fnmatch.fnmatchcase(lowered, pat_l[:-3]):
             return pat
     return None
 
@@ -194,28 +290,43 @@ def evaluate(
         replacement).
     """
     reasons: list[str] = []
-    attaches: list[str] = list(msg.get("attaches") or [])
+    raw_attaches: list = list(msg.get("attaches") or [])
     body = msg.get("body") or ""
+
+    # --- Pre-pass: normalize every attach. An attach that fails
+    # normalization (absolute path with no tail, traversal segments,
+    # non-string) is treated as a deliberate exfiltration attempt and
+    # short-circuits to ``denied`` — no honest workflow needs ``..``.
+    normalized: list[str] = []
+    for raw in raw_attaches:
+        norm = normalize_attach(raw)
+        if norm is None:
+            reasons.append(
+                f"attach {raw!r} failed normalization (absolute path, "
+                f"traversal, or non-string) → denied"
+            )
+            return Decision(action="denied", tier="hard_rule", reasons=reasons)
+        normalized.append(norm)
 
     # --- Hard layer ---------------------------------------------------------
 
     # 1. Hardcoded deny paths — non-overridable system locations.
-    for path in attaches:
+    for path in normalized:
         hit = _match_any(path, HARDCODED_DENY_PATHS)
         if hit:
             reasons.append(f"attach '{path}' hits hardcoded deny '{hit}'")
             return Decision(action="denied", tier="hard_rule", reasons=reasons)
 
     # 2. User deny paths from court.yaml.
-    for path in attaches:
+    for path in normalized:
         hit = _match_any(path, deny_paths)
         if hit:
             reasons.append(f"attach '{path}' hits deny rule '{hit}'")
             return Decision(action="denied", tier="hard_rule", reasons=reasons)
 
     # 3. User allow paths: if specified, every attach must match one.
-    if allow_paths and attaches:
-        for path in attaches:
+    if allow_paths and normalized:
+        for path in normalized:
             if not _match_any(path, allow_paths):
                 reasons.append(
                     f"attach '{path}' not covered by allow_paths {allow_paths} "
