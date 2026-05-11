@@ -1,0 +1,37 @@
+# Python build artefacts
+__pycache__/
+*.py[cod]
+*.egg-info/
+*.egg
+.pytest_cache/
+.mypy_cache/
+
+# Local venvs (each user re-creates them)
+.venv/
+venv/
+env/
+
+# OS junk
+.DS_Store
+Thumbs.db
+
+# Editor / IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Runtime artefacts inside the shipped example project.
+# (Real bus state lives under $COURT_ROOT, outside the repo; these
+# ignores are belt-and-braces in case anyone tests inside projects/example/.)
+projects/example/bus/*/inbox/*.md
+projects/example/bus/*/outbox/*.md
+projects/example/bus/*/inbox/.done/*.md
+projects/example/shared/event.log
+projects/example/logs/*
+
+# Per-project keypair + peer list — never check these in.
+# `peers.example.yaml` is the schema reference and IS committed;
+# `peers.yaml` is the live config and never should be.
+projects/*/identity/
+projects/*/peers.yaml

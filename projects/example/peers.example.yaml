@@ -1,0 +1,44 @@
+# agent-court peers configuration — example
+#
+# Real file lives at $COURT_ROOT/projects/<project>/peers.yaml — one per
+# project. Each project has its own keypair and its own peer list; project
+# A's peers cannot infer that project B exists on the same machine.
+#
+# Workflow:
+#   1. On each machine, for each project, run `court-keygen <project>`.
+#      It prints a fingerprint and a public key.
+#   2. Out of band (Signal, in person), exchange fingerprints + pubkeys
+#      with the other side. Specify which project each key belongs to.
+#   3. Each side edits THIS project's peers.yaml to list the other side(s).
+#   4. Enable `federation:` in court.yaml.
+#   5. Start `court-peer <project>` on each side.
+#   6. Call `dispatch_to_peer(project, peer_court_id, message)` from MCP.
+
+# Your own court identity. Optional — court_id falls back to the federation
+# block's court_id, which defaults to "<hostname>-<project>". The fingerprint
+# is informational; the daemon always re-derives it from the on-disk pub.key.
+self:
+  court_id: "alice-laptop-example"
+  pub_key_fingerprint: "ab12cd34ef56gh78"     # informational
+
+# Each peer is a remote court (a specific project on a specific machine).
+#
+# url       : base HTTP URL of the peer's court-peer daemon (no trailing slash).
+# pub_key_fingerprint : for human eyeball-verification on first config.
+# pub_key_b64         : the peer's public key (base64). Required at runtime for signature verify.
+# relation  : parent | child | sibling. Informational; later PRs let policy
+#             rules vary by relation (e.g. parent's dispatches are auto-allowed).
+peers:
+  - name: "Bob (PM)"
+    court_id: "bob-laptop-example"
+    url: "http://192.168.1.50:8765"
+    pub_key_fingerprint: "f0e1d2c3b4a59687"
+    pub_key_b64: "REPLACE_WITH_THE_BASE64_PUBLIC_KEY_BOB_GAVE_YOU="
+    relation: "child"       # Bob reports up to Alice
+
+  - name: "Carol (CTO)"
+    court_id: "carol-cto-example"
+    url: "http://10.0.5.12:8765"
+    pub_key_fingerprint: "1f2e3d4c5b6a7988"
+    pub_key_b64: "REPLACE_WITH_CAROLS_PUBLIC_KEY="
+    relation: "parent"      # Carol dispatches down to Alice

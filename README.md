@@ -1,0 +1,347 @@
+# agent-court
+
+> A tiny local multi-agent orchestrator. Each project under your `agent-court`
+> installation is a small **court** of LLM CLI processes — one tmux window
+> per role — coordinating through a filesystem message bus. An MCP server
+> exposes the bus upstream so any personal-assistant LLM (Claude Code,
+> Cursor, Zed, …) can dispatch work in. Multiple machines can federate over
+> HTTP with ed25519-signed messages.
+
+## The metaphor
+
+Think of your `agent-court` installation as a small **government**:
+
+| Layer | Technical name | Metaphor | What they do |
+|---|---|---|---|
+| Sovereign | the human (you) | 君王 | Issue intent; review results; final say. |
+| Chancellor | upstream LLM (Claude Code, etc.) | 丞相 / 助理 | Listens to the sovereign, decides which court to call. |
+| Court | a project under `$COURT_ROOT/projects/<p>/` | 府衙 (one per project) | A tmux session of roles + a private mailroom. |
+| Foreman | the `foreman` role | 工头 | Receives the chancellor's dispatch; splits work across workers. |
+| Workers | `frontend` / `backend` / `devops` / … | 百官 | Do the actual work in their own files. |
+| Sibling / Parent / Child court | a peer in `peers.yaml` | 邻邦 / 上司 / 下属 | Another `agent-court` project on another machine you've explicitly federated with. |
+
+> **Naming note.** "Peer" is overloaded: it means *both* a worker role
+> alongside the foreman, *and* a federated remote court. Inside the code
+> we keep `peer` for the remote-court meaning and use `relation: sibling`
+> (not `relation: peer`) inside `peers.yaml` to refer to courts at the
+> same level. See [Federation](#federation-optional) below.
+
+Everything is *visible*: each role is a real tmux window running a real CLI,
+and every message between roles is a markdown file you can `cat`.
+
+## Why
+
+LLM CLIs (Claude Code, Codex CLI, Cursor CLI, etc.) are *individually*
+powerful but lonely. They don't coordinate, they can't hand off, and they
+share no context. Multi-agent frameworks usually hide the agents behind a
+single chat window — which is the wrong direction if you want to *watch*
+what's happening, fork a frozen role's prompt, or feed in human nudges
+between turns.
+
+`agent-court` keeps agents visible (tmux), durable (files, not RAM),
+inspectable (a single `event.log` per project), and pluggable (one MCP
+server exposes the whole thing to anything that speaks MCP). When you
+need to hand work between people on different machines, an opt-in
+federation layer signs messages with ed25519 and POSTs them over HTTP.
+
+## Architecture
+
+```
+┌──────────────────────────────────────────────────────────────────────┐
+│ You (human)                                                           │
+│   ↕ (any UI: terminal, WeChat, Slack, web, etc.)                      │
+└──────────────────────────────┬───────────────────────────────────────┘
+                               │
+┌──────────────────────────────┴───────────────────────────────────────┐
+│ Upstream LLM (e.g. Claude Code, Cursor, a custom assistant)           │
+│   - speaks MCP                                                        │
+│   - has the agent-court MCP server attached                           │
+└──────────────────────────────┬───────────────────────────────────────┘
+                               │ MCP (stdio JSON-RPC) — full local access
+┌──────────────────────────────┴───────────────────────────────────────┐
+│ court-mcp server (Python, FastMCP)                                    │
+│  local : list_projects / dispatch_to_foreman / query_court_status     │
+│          read_upstream_inbox                                          │
+│  peer  : list_peers / dispatch_to_peer    ← signs + POSTs to remote   │
+└──────────────────────────────┬───────────────────────────────────────┘
+                               │ writes markdown files
+┌──────────────────────────────┴───────────────────────────────────────┐
+│ $COURT_ROOT/projects/<p>/bus/<role>/{inbox, outbox, inbox/.done}/     │
+└──────────────────────────────┬───────────────────────────────────────┘
+                               │ fswatch sees the new file
+┌──────────────────────────────┴───────────────────────────────────────┐
+│ court-watcher daemon                                                  │
+│   parse frontmatter → mv to target inbox → append event.log           │
+│                     → tmux send-keys notify target window             │
+└──────────────────────────────┬───────────────────────────────────────┘
+                               │
+┌──────────────────────────────┴───────────────────────────────────────┐
+│ tmux session: court-<project>                                         │
+│   ┌────────────┐  ┌────────────┐  ┌────────────┐  ┌────────────┐      │
+│   │ foreman    │  │ frontend   │  │ backend    │  │ devops     │  …   │
+│   │ (LLM CLI)  │  │ (LLM CLI)  │  │ (LLM CLI)  │  │ (LLM CLI)  │      │
+│   └────────────┘  └────────────┘  └────────────┘  └────────────┘      │
+└──────────────────────────────────────────────────────────────────────┘
+
+Optional federation (per-project, default OFF):
+
+   Machine A / project foo                    Machine B / project foo
+   ┌──────────────────────────┐               ┌──────────────────────────┐
+   │ MCP: dispatch_to_peer    │ ed25519 sig   │ court-peer :8765 /inbox  │
+   │   → POST /inbox          │──────────────▶│   verify sig             │
+   │                          │               │   check expose_roles     │
+   │                          │               │   drop into bus/         │
+   └──────────────────────────┘               └──────────────────────────┘
+```
+
+Each message is one markdown file:
+
+```markdown
+---
+from: foreman
+to: frontend
+ts: 2026-05-11T15:00:00+08:00
+id: 7f3d2e1a
+in_reply_to: 5a2c1b0d        # optional
+---
+
+Body text. Free-form markdown — that's what the LLM reads.
+```
+
+Filename: `<unix_ts>-<id>-<from>-to-<to>.md`. The watcher uses the YAML
+frontmatter to route. Replies set `in_reply_to` to chain a conversation.
+
+## Quickstart
+
+### Prerequisites
+
+- macOS or Linux
+- `tmux`, `fswatch`, `yq`, `uuidgen` on `$PATH`
+- Python 3.10+ (for the MCP server and the federation daemon)
+- An LLM CLI that accepts `--append-system-prompt` and optionally
+  `--model`. The default is `claude` (Anthropic's Claude Code), but
+  anything compatible works — set `default_cli` in your project's
+  `court.yaml`, or override per-role with `cli`.
+
+### Install
+
+```bash
+# 1. clone
+git clone https://github.com/YOUR_GH_USER/agent-court.git ~/agent-court
+cd ~/agent-court
+
+# 2. put the bin/ on your PATH (bash/zsh)
+echo 'export PATH="$HOME/agent-court/bin:$PATH"' >> ~/.zshrc
+# fish:
+#   fish_add_path --prepend $HOME/agent-court/bin
+
+# 3. install the MCP server (so an upstream LLM can dispatch into courts)
+cd mcp/court-mcp
+uv venv .venv
+uv pip install --python .venv/bin/python -e .
+
+# 4. create your court home and copy the example project
+mkdir -p ~/.agent-court/projects
+cp -r ~/agent-court/projects/example ~/.agent-court/projects/myproject
+# edit ~/.agent-court/projects/myproject/court.yaml to set real work_dir paths
+```
+
+### Run
+
+```bash
+court-up myproject
+```
+
+This brings up a tmux session `court-myproject` with one window per role,
+each running its LLM CLI with the role's system prompt loaded. A `court-watcher`
+daemon starts in the background; logs at `~/.agent-court/projects/myproject/logs/`.
+
+To stop:
+
+```bash
+court-down myproject
+```
+
+### Send a message from the command line
+
+```bash
+court-send -p myproject --to foreman "review the new auth changes and dispatch to whoever needs to follow up"
+```
+
+The foreman's claude window will get a `[notify]` line, read the inbox,
+and react.
+
+### Connect to Claude Code (or any MCP client)
+
+```bash
+# Claude Code: register the court MCP server at user scope
+claude mcp add -s user agent-court \
+  $HOME/agent-court/mcp/court-mcp/.venv/bin/python \
+  $HOME/agent-court/mcp/court-mcp/server.py
+
+# Verify
+claude mcp list   # should show agent-court ✓ Connected
+```
+
+Claude Code now sees the full local-MCP toolset:
+
+| Tool | Use it when... |
+|---|---|
+| `list_projects` | The user mentions a project by name and you want to know what's available. |
+| `dispatch_to_foreman(project, message, target_role?)` | The user wants someone in a court to do something. |
+| `query_court_status(project)` | The user asks "what's happening in `<project>`?". |
+| `read_upstream_inbox(project)` | The user asks "any updates from `<project>`?" (foreman's replies live here). |
+| `list_peers(project)` | The user asks about federation status for a project. |
+| `dispatch_to_peer(project, peer_court_id, message, ...)` | The user wants to forward something to a federated court. |
+
+Local MCP tools have **full machine access** — they read and write
+anywhere under `$COURT_ROOT/projects/<p>/`. The restriction surface lives
+on the federation side (next section).
+
+Same shape works for Cursor, Zed, any MCP-aware assistant, or a custom
+Hermes-style agent — anything that can spawn an MCP stdio server.
+
+## Federation (optional)
+
+Default is **off**. Each project decides for itself whether to accept
+inbound messages from federated peers — there is no global switch.
+
+The model is **project-scoped, not machine-scoped**: each project under
+`$COURT_ROOT/projects/<p>/` has its own keypair, its own `peers.yaml`,
+and its own `court_id`. Two projects on the same machine cannot infer
+that the other exists (different keys, separate peer lists). This is
+deliberate isolation — "my work for client A" should not leak into "my
+work for client B" just because they share a laptop.
+
+To enable federation for one project:
+
+```bash
+# 1. generate that project's keypair
+court-keygen myproject
+# → prints the public key + fingerprint to share with the other side
+
+# 2. edit court.yaml — uncomment the federation: block
+$EDITOR ~/.agent-court/projects/myproject/court.yaml
+
+# 3. add the remote peer to that project's peers.yaml
+$EDITOR ~/.agent-court/projects/myproject/peers.yaml
+# (see projects/example/peers.example.yaml for the schema)
+
+# 4. start the receiver daemon for that project
+court-peer myproject
+# → listens on 0.0.0.0:8765 by default, accepts POST /inbox
+```
+
+When `federation: enabled: false` (or the block is missing entirely),
+`court-peer` refuses to start and `dispatch_to_peer` returns
+`{"error": "federation_disabled"}`. Flipping the flag back to false
+takes effect on the next inbound request — no restart needed.
+
+Inbound messages go through three checks before they land in the bus:
+
+1. **Signature** — verified against the sender's `pub_key_b64` from this
+   project's `peers.yaml`. Bad sig → 401.
+2. **Known sender** — `from_court` must appear in this project's
+   `peers.yaml`. Unknown → 403.
+3. **Role whitelist** — the `to:` role must be listed in
+   `federation.expose_roles`. Default is `[foreman]`, so only the
+   foreman is reachable from outside; foreman then routes work
+   internally. Off-list → 403.
+
+A fourth layer — path-level allow/deny rules under `allow_paths` /
+`deny_paths` in `court.yaml` — is wired into the schema now but
+enforced by the policy engine in **PR-2**. PR-1 ships the network +
+identity + role whitelist; later PRs add policy, human approval over
+FeiShu/WeChat, and IM redundancy.
+
+For a full two-machine walk-through see [docs/lan-deployment.md](./docs/lan-deployment.md).
+
+## Directory layout
+
+```
+$COURT_ROOT/                                  # default ~/.agent-court
+├── projects/
+│   └── myproject/
+│       ├── court.yaml                        # project config (+ federation block)
+│       ├── peers.yaml                        # this project's known peers
+│       ├── identity/                         # this project's keypair (mode 0600/0644)
+│       │   ├── priv.key
+│       │   └── pub.key
+│       ├── prompts/
+│       │   ├── foreman.md
+│       │   ├── frontend.md
+│       │   └── ...                           # one per role
+│       ├── bus/
+│       │   ├── foreman/{inbox,outbox,inbox/.done}/
+│       │   ├── frontend/...
+│       │   ├── backend/...
+│       │   ├── upstream/...                  # MCP caller's outbox/inbox
+│       │   ├── human/...                     # your CLI sends land here
+│       │   └── <peer_court_id>/inbox/        # inbound peer messages
+│       ├── shared/event.log
+│       └── logs/{watcher.log, peer-errors.log, watcher.pid}
+```
+
+The repository itself (this one) only ships:
+- `bin/` — shell scripts (`court-up`, `court-down`, `court-watcher`,
+  `court-send`, `role-launch`, `court-keygen`, `court-peer`)
+- `mcp/court-mcp/` — the Python MCP server + peer daemon + keygen
+- `projects/example/` — a fork-me example project (with a commented-out
+  `federation:` block as schema reference)
+- `docs/` — extra docs (LAN deployment, cc-connect bridge, etc.)
+
+Your actual courts live under `$COURT_ROOT` (default `~/.agent-court/`),
+*outside* the repo.
+
+## FAQ
+
+### Why not just use sub-agents / a single agent framework?
+
+Sub-agents (in Claude Code, AutoGen, CrewAI, etc.) decide *for you* when to
+spawn workers, hide them in background context, and tear them down on
+completion. You can't `tmux attach` and watch an agent think, you can't fork
+its system prompt mid-task, and the message graph is owned by the framework.
+
+`agent-court` is closer to a tiny operating system: long-running role
+processes, filesystem IPC, an external watcher. Worse abstraction, better
+inspectability.
+
+### Is it just for coding?
+
+No. Roles are free-form. Anything you can describe in a system prompt is a
+valid role: a researcher who pulls trends, a copywriter who turns research
+into scripts, an analyst who reads logs. Pair it with whatever LLM CLI you
+want.
+
+### How does this interact with my existing LLM CLI?
+
+`role-launch` invokes your CLI with `--append-system-prompt <prompt file>`
+and (optionally) `--model <model>`. If your CLI uses a different flag, set
+the role's `cli` field in `court.yaml` to a small wrapper script.
+
+### Why is each project a separate keypair? Can't I share one across projects?
+
+You *could*, but the design specifically discourages it. The point of
+per-project keys is that "Alice's work for client A" and "Alice's work
+for client B" are two different courts on the network — a peer Alice
+federated with for project A cannot, by virtue of that trust, also see
+or dispatch into project B. Different projects = different
+`court_id`s + different keys + different `peers.yaml`. Re-using a
+keypair across projects would collapse that isolation.
+
+### What about cost?
+
+Each role is an independent CLI session, so context isn't shared — every
+role re-reads its own system prompt + bus inbox. That's the trade-off for
+isolation. If you only have one project active, run only that project.
+
+## License
+
+MIT. See [LICENSE](./LICENSE).
+
+## Status
+
+Early. PR-1 (HTTP + identity + signed dispatch) is working but lightly
+tested. PR-2 (policy engine + path-level allow/deny enforcement) is
+next. Bug reports and prompts for new role archetypes welcome — open
+an issue.
