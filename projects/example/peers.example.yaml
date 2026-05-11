@@ -23,22 +23,35 @@ self:
 
 # Each peer is a remote court (a specific project on a specific machine).
 #
-# url       : base HTTP URL of the peer's court-peer daemon (no trailing slash).
+# url         : base HTTP URL of the peer's court-peer daemon (no trailing slash).
 # pub_key_fingerprint : for human eyeball-verification on first config.
-# pub_key_b64         : the peer's public key (base64). Required at runtime for signature verify.
-# relation  : parent | child | sibling. Informational; later PRs let policy
-#             rules vary by relation (e.g. parent's dispatches are auto-allowed).
+# pub_key_b64 : the peer's public key (base64). Required at runtime for signature verify.
+# relation    : parent | child | sibling. Informational; later PRs let policy
+#               rules vary by relation (e.g. parent's dispatches are auto-allowed).
+# policy_tier : (PR-2, optional) tier_a | tier_b | tier_c. Pins how this peer's
+#               inbound messages are gated. Absent = use policy.yaml default_tier.
+#               Hard rules (deny_paths, sensitive keywords) always apply on top.
 peers:
   - name: "Bob (PM)"
     court_id: "bob-laptop-example"
     url: "http://192.168.1.50:8765"
     pub_key_fingerprint: "f0e1d2c3b4a59687"
     pub_key_b64: "REPLACE_WITH_THE_BASE64_PUBLIC_KEY_BOB_GAVE_YOU="
-    relation: "child"       # Bob reports up to Alice
+    relation: "child"          # Bob reports up to Alice
+    policy_tier: "tier_b"      # standard: judge (PR-3 will route to llm_judge)
 
   - name: "Carol (CTO)"
     court_id: "carol-cto-example"
     url: "http://10.0.5.12:8765"
     pub_key_fingerprint: "1f2e3d4c5b6a7988"
     pub_key_b64: "REPLACE_WITH_CAROLS_PUBLIC_KEY="
-    relation: "parent"      # Carol dispatches down to Alice
+    relation: "parent"         # Carol dispatches down to Alice
+    policy_tier: "tier_c"      # parent court is trusted; auto-pass into inbox
+
+  - name: "External vendor"
+    court_id: "vendor-build-bot"
+    url: "http://203.0.113.5:8765"
+    pub_key_fingerprint: "deadbeefcafe1234"
+    pub_key_b64: "REPLACE_WITH_VENDORS_PUBLIC_KEY="
+    relation: "sibling"
+    policy_tier: "tier_a"      # untrusted: everything goes to pending-approval

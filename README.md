@@ -237,7 +237,7 @@ When `federation: enabled: false` (or the block is missing entirely),
 `{"error": "federation_disabled"}`. Flipping the flag back to false
 takes effect on the next inbound request — no restart needed.
 
-Inbound messages go through three checks before they land in the bus:
+Inbound messages go through four checks before they land in the bus:
 
 1. **Signature** — verified against the sender's `pub_key_b64` from this
    project's `peers.yaml`. Bad sig → 401.
@@ -247,12 +247,46 @@ Inbound messages go through three checks before they land in the bus:
    `federation.expose_roles`. Default is `[foreman]`, so only the
    foreman is reachable from outside; foreman then routes work
    internally. Off-list → 403.
+4. **Policy engine** (PR-2) — see next section.
 
-A fourth layer — path-level allow/deny rules under `allow_paths` /
-`deny_paths` in `court.yaml` — is wired into the schema now but
-enforced by the policy engine in **PR-2**. PR-1 ships the network +
-identity + role whitelist; later PRs add policy, human approval over
+PR-1 ships the network + identity + role whitelist; PR-2 adds the
+policy layer below; later PRs add LLM judge, human approval over
 FeiShu/WeChat, and IM redundancy.
+
+### Policy engine (PR-2)
+
+After signature + role checks pass, every inbound message is graded
+by the policy engine and routed to one of four outcomes:
+
+| Decision | Goes to | When |
+|---|---|---|
+| `auto_pass` | `bus/<peer>/inbox/` | tier_c peer, clean body, paths within allow list |
+| `judge` | `bus/<peer>/inbox/` *(with warning log)* | tier_b peer, clean. PR-3 will replace with LLM judge. |
+| `human_required` | `bus/<peer>/pending-approval/` | tier_a peer, *or* sensitive keyword, *or* attach outside allow_paths |
+| `denied` | `bus/<peer>/denied/` *(audit only)* | attach matches a deny path. Never reaches foreman. |
+
+Configuration lives in two files per project:
+
+- **`court.yaml`** (`federation.allow_paths` / `deny_paths`) — path
+  globs that constrain what files an inbound message may reference
+  via its `attaches:` frontmatter field.
+- **`policy.yaml`** — `default_tier:` (one of `tier_a`/`tier_b`/`tier_c`)
+  + optional `sensitive_keywords:` list appended to the built-in one.
+
+`peers.yaml` may pin `policy_tier:` per peer; if absent, falls through
+to `policy.yaml`'s `default_tier`.
+
+**Hardcoded layer (cannot be overridden by config).** Paths matching
+`**/.ssh/**`, `**/.env`, `**/id_rsa*`, `/etc/**`, `**/credentials.json`,
+`**/secrets/**`, `**/.aws/**`, `**/.kube/config` are *always* denied.
+Bodies containing `api_key`, `password`, `secret`, `token`, `sk-`,
+`AKIA`, etc. always force `human_required`.
+
+Every decision is appended to
+`$COURT_ROOT/projects/<p>/logs/policy-log.jsonl` for audit.
+
+See [docs/lan-deployment.md](./docs/lan-deployment.md) for a full
+example with the `attaches:` field.
 
 For a full two-machine walk-through see [docs/lan-deployment.md](./docs/lan-deployment.md).
 
@@ -264,6 +298,7 @@ $COURT_ROOT/                                  # default ~/.agent-court
 │   └── myproject/
 │       ├── court.yaml                        # project config (+ federation block)
 │       ├── peers.yaml                        # this project's known peers
+│       ├── policy.yaml                       # PR-2: tier + sensitive keywords (optional)
 │       ├── identity/                         # this project's keypair (mode 0600/0644)
 │       │   ├── priv.key
 │       │   └── pub.key
@@ -277,9 +312,12 @@ $COURT_ROOT/                                  # default ~/.agent-court
 │       │   ├── backend/...
 │       │   ├── upstream/...                  # MCP caller's outbox/inbox
 │       │   ├── human/...                     # your CLI sends land here
-│       │   └── <peer_court_id>/inbox/        # inbound peer messages
+│       │   └── <peer_court_id>/              # inbound peer messages, fanned by decision
+│       │       ├── inbox/                    #   auto_pass + judge land here
+│       │       ├── pending-approval/         #   human_required parks here
+│       │       └── denied/                   #   denied (audit only, never delivered)
 │       ├── shared/event.log
-│       └── logs/{watcher.log, peer-errors.log, watcher.pid}
+│       └── logs/{watcher.log, peer-errors.log, policy-log.jsonl, watcher.pid}
 ```
 
 The repository itself (this one) only ships:
@@ -341,7 +379,11 @@ MIT. See [LICENSE](./LICENSE).
 
 ## Status
 
-Early. PR-1 (HTTP + identity + signed dispatch) is working but lightly
-tested. PR-2 (policy engine + path-level allow/deny enforcement) is
-next. Bug reports and prompts for new role archetypes welcome — open
-an issue.
+Early. PR-1 (HTTP + identity + signed dispatch + role whitelist) and
+PR-2 (policy engine + path-level allow/deny + sensitive-keyword
+filter + pending-approval bin) are working but lightly tested.
+PR-3 (LLM judge for the `tier_b` / `judge` branch) is next; after
+that, PR-4 (sudo-style temp authorization), PR-5 (multi-channel
+human approval: terminal + FeiShu + WeChat), PR-6 (IM redundancy).
+Bug reports and prompts for new role archetypes welcome — open an
+issue.

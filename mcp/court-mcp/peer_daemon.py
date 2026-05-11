@@ -31,6 +31,7 @@ import sys
 
 from aiohttp import web
 
+import policy
 from peer_lib import (
     append_peer_error,
     court_root,
@@ -153,14 +154,49 @@ async def _inbox(request: web.Request) -> web.Response:
             status=403,
         )
 
-    fpath = write_inbound_to_bus(project, msg)
+    # PR-2 policy layer — runs after signature + role whitelist pass.
+    # peer_tier comes from peers.yaml entry, falls back to policy.default_tier.
+    policy_cfg = policy.load_policy(project)
+    decision = policy.evaluate(
+        msg,
+        peer_tier=peer.policy_tier,
+        policy=policy_cfg,
+        allow_paths=fed.allow_paths,
+        deny_paths=fed.deny_paths,
+    )
+    policy.log_decision(project, msg, decision)
+
+    subdir = policy.subdir_for(decision.action)
+    fpath = write_inbound_to_bus(
+        project,
+        msg,
+        subdir=subdir,
+        policy_decision=decision.action,
+        policy_reasons=decision.reasons,
+    )
+
     _log(
         project,
         f"accepted: from {from_court} ({msg.get('from')}) -> {target} "
-        f"id={msg['id']} file={fpath}",
+        f"id={msg['id']} decision={decision.action} tier={decision.tier} "
+        f"file={fpath}",
     )
+
+    # Map decision → outer status. We always return 200: signature + role checks
+    # already passed, so the network exchange itself is fine. The policy
+    # outcome is conveyed in the decision field so the sender's MCP tool can
+    # surface it back to the upstream LLM.
+    status_map = {
+        "auto_pass": "accepted",
+        "judge": "accepted",
+        "human_required": "pending_approval",
+        "denied": "denied",
+    }
     return web.json_response({
-        "status": "accepted",
+        "status": status_map.get(decision.action, "accepted"),
+        "decision": decision.action,
+        "tier": decision.tier,
+        "reasons": decision.reasons,
         "file_path": str(fpath),
         "id": msg["id"],
     })

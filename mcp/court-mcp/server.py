@@ -379,6 +379,7 @@ def dispatch_to_peer(
     target_role: str = "foreman",
     sender_role: str = "upstream",
     reply_to: Optional[str] = None,
+    attaches: Optional[list] = None,
 ) -> dict:
     """Sign and POST a message to a remote court's /inbox endpoint.
 
@@ -397,10 +398,17 @@ def dispatch_to_peer(
             ``from``. Defaults to ``upstream`` (i.e. "an upstream LLM
             assistant"); change to ``foreman`` etc. as appropriate.
         reply_to: optional id of a previous message this one replies to.
+        attaches: optional list of file paths this message references. The
+            remote's policy engine (PR-2) inspects these against allow/deny
+            globs and may park the message in pending-approval/ or denied/
+            instead of inbox/. Paths are signed, so they cannot be altered
+            in transit.
 
     Returns:
         dict with the remote's response or, on failure, an ``error`` field.
         Never raises — designed for an LLM tool-caller to inspect and react.
+        On success the ``response`` field carries the policy decision
+        (``decision``, ``tier``, ``reasons``) the remote applied.
     """
     if not peer_lib.project_dir(project).is_dir():
         return {
@@ -436,6 +444,12 @@ def dispatch_to_peer(
     }
     if reply_to:
         msg["in_reply_to"] = reply_to
+    # Only include attaches in the signed payload if the caller actually
+    # listed any. Passing an empty list would still make it through canonical
+    # JSON as `"attaches":[]`, which is fine, but skipping it entirely keeps
+    # the wire compatible with PR-1 senders that don't know about the field.
+    if attaches:
+        msg["attaches"] = list(attaches)
 
     msg["signature"] = peer_lib.sign_message(msg, identity.priv)
 

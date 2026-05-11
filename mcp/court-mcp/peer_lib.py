@@ -181,6 +181,8 @@ def load_identity(project: str) -> Identity:
 # ---------------------------------------------------------------------------
 
 SIGNED_FIELDS: tuple[str, ...] = (
+    "attaches",        # PR-2: explicit file/path references, must be signed so a peer
+                       # can't strip or forge them after the sender signed the message
     "body",
     "from",
     "from_court",
@@ -268,6 +270,7 @@ class Peer:
     pub_key_fingerprint: str
     pub_key_b64: Optional[str]
     relation: str   # parent | child | sibling (was "role" pre-PR-1; renamed to disambiguate from agent roles)
+    policy_tier: Optional[str] = None   # PR-2: tier_a | tier_b | tier_c. None → fall through to policy.default_tier
 
 
 @dataclass
@@ -314,6 +317,7 @@ def load_peers(project: str) -> PeersConfig:
             # Accept the historical "role" key as a fallback so a stale config
             # doesn't lock anyone out.
             relation=entry.get("relation") or entry.get("role") or "sibling",
+            policy_tier=entry.get("policy_tier"),
         ))
     return PeersConfig(
         project=project,
@@ -361,13 +365,29 @@ def append_peer_error(project: str, line: str) -> None:
 # Bus file emission
 # ---------------------------------------------------------------------------
 
-def write_inbound_to_bus(project: str, msg: dict) -> Path:
+def write_inbound_to_bus(
+    project: str,
+    msg: dict,
+    *,
+    subdir: str = "inbox",
+    policy_decision: Optional[str] = None,
+    policy_reasons: Optional[list[str]] = None,
+) -> Path:
     """Write a verified inbound peer message into the project's bus.
 
-    Lands at ``$bus/<from_court>/inbox/<unix_ts>-<id>-<from>-to-<to>.md``
-    so the local foreman/upstream can ``ls`` per-court inboxes. The existing
-    ``court-watcher`` ignores anything outside ``*/outbox/*.md``, so writing
-    into inbox here does not double-route.
+    Default lands at ``$bus/<from_court>/inbox/<unix_ts>-<id>-<from>-to-<to>.md``.
+    PR-2 callers may pass ``subdir="pending-approval"`` or ``"denied"`` to
+    park messages that didn't auto-pass; the foreman never sees those
+    files unless a human moves them into ``inbox/``.
+
+    When ``policy_decision`` is given, frontmatter gets two extra fields
+    (``policy_decision``, ``policy_reasons``) so a downstream reader
+    (foreman, llm_judge, human reviewer) can see *why* the message
+    landed where it did without consulting the audit log.
+
+    The existing ``court-watcher`` only inspects ``*/outbox/*.md`` files,
+    so writing into ``inbox`` / ``pending-approval`` / ``denied`` here
+    does not double-route through the watcher.
     """
     from_court = msg["from_court"]
     msg_id = msg["id"]
@@ -376,11 +396,14 @@ def write_inbound_to_bus(project: str, msg: dict) -> Path:
     ts_epoch = int(datetime.now().timestamp())
     fname = f"{ts_epoch}-{msg_id}-{sender_role}-to-{to_role}.md"
 
-    inbox = project_bus_dir(project) / from_court / "inbox"
-    inbox.mkdir(parents=True, exist_ok=True)
-    (inbox / ".done").mkdir(exist_ok=True)
+    target = project_bus_dir(project) / from_court / subdir
+    target.mkdir(parents=True, exist_ok=True)
+    # Only the canonical inbox needs a .done sidecar (court-watcher pattern);
+    # pending-approval / denied don't get auto-archived.
+    if subdir == "inbox":
+        (target / ".done").mkdir(exist_ok=True)
 
-    fpath = inbox / fname
+    fpath = target / fname
     lines = [
         "---",
         f"from: {sender_role}",
@@ -392,6 +415,13 @@ def write_inbound_to_bus(project: str, msg: dict) -> Path:
     in_reply_to = msg.get("in_reply_to")
     if in_reply_to:
         lines.append(f"in_reply_to: {in_reply_to}")
+    attaches = msg.get("attaches") or []
+    if attaches:
+        lines.append(f"attaches: {json.dumps(attaches, ensure_ascii=False)}")
+    if policy_decision:
+        lines.append(f"policy_decision: {policy_decision}")
+    if policy_reasons:
+        lines.append(f"policy_reasons: {json.dumps(policy_reasons, ensure_ascii=False)}")
     lines.append("---")
     lines.append("")
     lines.append(msg.get("body", ""))

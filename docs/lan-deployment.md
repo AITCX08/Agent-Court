@@ -4,11 +4,13 @@ Walk-through for getting two `agent-court` projects talking on the same
 local network. No public IPs, no VPN — works the moment both machines
 can ping each other on the LAN.
 
-> This is PR-1: HTTP transport + ed25519 signing + role whitelist.
-> There is **no policy engine, no human approval, no path-level
-> enforcement, no encryption** yet — anything in `peers.yaml` whose
-> target role is in `expose_roles` will land directly in your bus.
-> Lock down `peers.yaml` accordingly until later PRs land.
+> Status: PR-1 (HTTP + signing + role whitelist) and PR-2 (policy
+> engine + path/keyword gating + pending-approval bin) are live.
+> Still ahead: PR-3 LLM judge, PR-4 sudo-style temp authorization,
+> PR-5 multi-channel human approval (FeiShu/WeChat), PR-6 IM
+> redundancy, and TLS. PR-2's `tier_b → judge` branch currently
+> passes through to inbox with a warning log — it will route to
+> `llm_judge` once PR-3 lands.
 
 ## Mental model first
 
@@ -80,8 +82,9 @@ federation:
   expose_roles:
     - foreman
 
-  # PR-2 will enforce these against any path referenced in inbound
-  # messages. Schema is wired in PR-1; enforcement lands with policy.
+  # PR-2: paths the policy engine checks any inbound `attaches:` field
+  # against. Allow non-empty + attach not covered → human_required.
+  # Deny match (here OR in the hardcoded list) → denied.
   allow_paths:
     - "bus/foreman/inbox/**"
     - "shared/notes-public.md"
@@ -90,9 +93,10 @@ federation:
     - "shared/notes-private.md"
 ```
 
-The `expose_roles` whitelist is enforced *now*: anything inbound whose
-`to:` field is not in this list gets a `403 role_not_exposed` and the
-attempt is logged.
+The `expose_roles` whitelist and `allow_paths` / `deny_paths` are
+both enforced. After the role check passes, the policy engine grades
+the message and routes it to inbox / pending-approval / denied — see
+the "Policy gating" section below.
 
 ## 3. Exchange fingerprints + public keys
 
@@ -194,10 +198,104 @@ On Bob's machine the file shows up at:
 ~/.agent-court/projects/example/bus/alice-laptop-example/inbox/1715432400-7f3d2e1a-upstream-to-foreman.md
 ```
 
-Bob's foreman (if running under `court-up example`) can read that
-manually for now. PR-2 will add a policy engine that decides whether
-to route inbound peer messages straight into the foreman's main inbox
-or hold them for approval.
+Bob's foreman (running under `court-up example`) sees the file via
+court-watcher and reacts.
+
+## Policy gating (PR-2)
+
+Once an inbound message clears signature + role checks, the policy
+engine grades it and routes it to one of three on-disk locations:
+
+| Decision | Lands at | Means |
+|---|---|---|
+| `auto_pass` / `judge` | `bus/<peer>/inbox/` | Delivered to foreman normally |
+| `human_required` | `bus/<peer>/pending-approval/` | Waiting — a human must `mv` it into inbox |
+| `denied` | `bus/<peer>/denied/` | Audit-only; never reaches foreman |
+
+The response from `dispatch_to_peer` always shows the decision so the
+sender's LLM can react:
+
+```json
+{
+  "http_status": 200,
+  "response": {
+    "status": "pending_approval",
+    "decision": "human_required",
+    "tier": "hard_rule",
+    "reasons": ["sensitive keyword 'password' in body → human_required"],
+    "file_path": ".../bus/alice-laptop-example/pending-approval/...md"
+  }
+}
+```
+
+### Optional: `policy.yaml`
+
+Add `~/.agent-court/projects/example/policy.yaml` to tune the default
+tier and add custom sensitive keywords:
+
+```yaml
+default_tier: tier_b           # tier_a (human) | tier_b (judge) | tier_c (auto)
+sensitive_keywords:
+  - "wire transfer"
+  - "merger"
+```
+
+If the file is missing the defaults are `tier_b` + no extra keywords.
+
+### Per-peer tier (in `peers.yaml`)
+
+```yaml
+peers:
+  - name: "External vendor"
+    court_id: "vendor-build-bot"
+    relation: "sibling"
+    policy_tier: "tier_a"          # untrusted: everything → pending-approval
+```
+
+### Trying it: `attaches` + `dispatch_to_peer`
+
+```python
+dispatch_to_peer(
+    project="example",
+    peer_court_id="bob-laptop-example",
+    message="please review the diff",
+    attaches=["bus/foreman/inbox/diff.md"],   # passes allow_paths
+)
+# → decision: judge (or auto_pass if tier_c)
+
+dispatch_to_peer(
+    project="example",
+    peer_court_id="bob-laptop-example",
+    message="here is the prod password=hunter2",
+)
+# → decision: human_required (keyword)
+
+dispatch_to_peer(
+    project="example",
+    peer_court_id="bob-laptop-example",
+    message="have a look",
+    attaches=["~/.ssh/id_ed25519"],
+)
+# → decision: denied (hardcoded path)
+```
+
+The decision trail is appended to
+`~/.agent-court/projects/example/logs/policy-log.jsonl`:
+
+```bash
+tail -f ~/.agent-court/projects/example/logs/policy-log.jsonl
+```
+
+### Approving a `pending-approval` message
+
+There is no approval UI yet (PR-5 adds terminal + FeiShu + WeChat).
+For now, eyeball the file and move it manually:
+
+```bash
+cd ~/.agent-court/projects/example/bus/alice-laptop-example
+cat pending-approval/*.md           # read the body + policy_reasons
+mv pending-approval/<file>.md inbox/   # release to foreman
+```
 
 ## Firewall checklist
 
@@ -252,6 +350,29 @@ machine's firewall — most home LANs are wide open already.
 - You dispatched to a role not in the peer's `federation.expose_roles`
   list. By default only `foreman` is exposed; ask the peer to either
   route via foreman or add your target role to `expose_roles`.
+
+### `decision: denied` in response
+
+- An attach matched a deny rule (yours or hardcoded). The message is
+  *not* delivered — it sits in `bus/<your-court-id>/denied/` on the
+  receiver for audit. Inspect the `reasons` field in the response:
+  ```
+  "reasons": ["attach '/etc/passwd' hits hardcoded deny '/etc/**'"]
+  ```
+- Hardcoded denies cannot be lifted from `court.yaml` — by design.
+  If you genuinely need that path, restructure the dispatch (e.g.
+  paste the relevant content into the body) or have the peer add a
+  manual sudo grant (PR-4 will productize this).
+
+### `decision: human_required` / `status: pending_approval`
+
+- Either the sender's peer entry is `policy_tier: tier_a`, or the
+  body triggered a sensitive-keyword match, or an attach landed
+  outside `allow_paths`. The file is in
+  `bus/<your-court-id>/pending-approval/` on the receiver; a human
+  there must `mv` it to `inbox/` to actually deliver.
+- Check the receiver's `logs/policy-log.jsonl` — every decision has a
+  `reasons` array explaining which rule fired.
 
 ### `list_peers` shows `reachable: false`
 
