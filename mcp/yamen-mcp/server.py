@@ -704,5 +704,89 @@ def zhui_lingpai(project: str, grant_id: str) -> dict:
     }
 
 
+# ---------------------------------------------------------------------------
+# PR-5 shenpi tools — human approval of pending-approval items
+# ---------------------------------------------------------------------------
+
+
+import shenpi as _shenpi
+
+
+def _item_to_row(item) -> dict:
+    return {
+        "msg_id": item.msg_id,
+        "peer": item.peer,
+        "msg_from": item.msg_from,
+        "msg_to": item.msg_to,
+        "ts_unix": item.ts_unix,
+        "reasons": item.reasons,
+        "body_excerpt": (item.body or "").strip().splitlines()[0][:300] if item.body else "",
+    }
+
+
+@mcp.tool()
+def lie_liuzhong(project: str) -> dict:
+    """List all留中 (pending-approval) items awaiting human review.
+
+    Reply splits into ``pending`` (active) and ``expired`` (older than
+    ``bangjiao.shenpi.timeout_seconds`` — empty when timeout is 0 / unset).
+    Each entry includes the message id, peer court_id, reason chain, and
+    a short body excerpt; the upstream LLM can surface these to the user
+    without reading additional files.
+    """
+    if not bangjiao.project_dir(project).is_dir():
+        return _bad_project_reply(project)
+    try:
+        cfg = bangjiao.load_bangjiao(project).shenpi
+        listing = _shenpi.list_pending(project, timeout_seconds=cfg.timeout_seconds)
+    except ValueError as e:
+        return {"error": "invalid_argument", "detail": str(e), "project": project}
+    return {
+        "project": project,
+        "pending": [_item_to_row(i) for i in listing["pending"]],
+        "expired": [_item_to_row(i) for i in listing["expired"]],
+    }
+
+
+@mcp.tool()
+def pizhun(project: str, msg_id: str, action: str, by: str = "") -> dict:
+    """Approve or deny one留中 message.
+
+    Args:
+        project: receiving yamen's project name.
+        msg_id: the ``id`` frontmatter of the pending file.
+        action: one of ``"approve"`` (release to inbox/) or ``"deny"``
+            (park in denied/). Anything else returns ``error: invalid_action``.
+        by: free-form actor tag for the audit log (e.g. ``alice@laptop``
+            or ``wechat-user-bob``). Optional; left empty if unset.
+
+    Approval refuses an expired item (older than
+    ``bangjiao.shenpi.timeout_seconds``) with ``error: "expired"`` so a
+    forgotten message can't sneak through.
+
+    Returns ``{ok: true, result: "approved"|"denied"}`` on success or an
+    ``error`` dict otherwise (``not_found``, ``expired``, ``invalid_action``,
+    ``io_error``, ``invalid_argument``).
+    """
+    if not bangjiao.project_dir(project).is_dir():
+        return _bad_project_reply(project)
+    if action not in ("approve", "deny"):
+        return {"error": "invalid_action", "detail": f"action={action!r} must be 'approve' or 'deny'"}
+    try:
+        if action == "approve":
+            cfg = bangjiao.load_bangjiao(project).shenpi
+            result = _shenpi.approve(
+                project, msg_id, by=by, timeout_seconds=cfg.timeout_seconds,
+            )
+        else:
+            result = _shenpi.deny(project, msg_id, by=by)
+    except ValueError as e:
+        return {"error": "invalid_argument", "detail": str(e), "project": project}
+
+    if result in ("approved", "denied"):
+        return {"ok": True, "result": result, "project": project, "msg_id": msg_id}
+    return {"error": result, "project": project, "msg_id": msg_id}
+
+
 if __name__ == "__main__":
     mcp.run()

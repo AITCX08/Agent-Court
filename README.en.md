@@ -363,6 +363,62 @@ rather than reading from outside the projects root.
 
 For a full two-machine walk-through see [docs/lan-deployment.en.md](./docs/lan-deployment.en.md).
 
+### 留中 / Pending-approval review (PR-5)
+
+Messages the policy engine routes to `human_required` land in
+`bus/<peer>/pending-approval/` and wait. PR-5 wires that wait up to
+both **outbound notification** and **remote approval**.
+
+**Three notification channels**, all best-effort — a failure in one
+never blocks the daemon's HTTP response or the other channels:
+
+| Channel | How |
+|---|---|
+| `terminal` | Append a banner to the project's `shared/event.log`; also write to stderr if the daemon is running on a TTY. |
+| `feishu` | POST to a Feishu/Lark custom-bot webhook with a plain-text payload. |
+| `wechat` | Shell out to `cc-connect send` so the existing WeChat bridge delivers the notification into a specific chat thread. |
+
+**Config** lives under `bangjiao.shenpi` in `yamen.yaml`:
+
+```yaml
+bangjiao:
+  enabled: true
+  shenpi:
+    enabled: true
+    channels: [terminal, feishu, wechat]
+    timeout_seconds: 0     # 0 = never expire; >0 → pizhun cleanup auto-denies past this age
+    feishu:
+      webhook_url: "https://open.feishu.cn/open-apis/bot/v2/hook/..."
+      mention: ["ou_xxx"]   # open_ids to @ in the message body
+    wechat:
+      cc_connect_bin: "cc-connect"        # binary on PATH; override for custom installs
+      cc_connect_project: "k2work"        # which cc-connect project to push to
+      cc_connect_session_key: "..."       # which conversation
+```
+
+**Approval action** is unified through `pizhun` — same surface from
+terminal, Feishu reply, or WeChat reply:
+
+```bash
+pizhun example list                # show pending + expired
+pizhun example approve 4616c19a    # → bus/<peer>/inbox/
+pizhun example deny    4616c19a    # → bus/<peer>/denied/
+pizhun example cleanup             # auto-deny everything past timeout
+```
+
+MCP tools (callable from any upstream LLM that has agent-yamen attached):
+
+- `lie_liuzhong(project)` — list pending + expired
+- `pizhun(project, msg_id, action)` — action ∈ `{"approve", "deny"}`
+
+**The WeChat loop closes itself** through cc-connect: the bridge
+delivers the notification to a WeChat user, the user replies "approve
+4616c19a", cc-connect's claude session sees that and calls
+`pizhun(...)` over MCP. No webhook callback gateway needed.
+
+Every approval action (approved / denied / expired-auto-deny / notify
+failure / etc.) is appended to `logs/shenpi-log.jsonl` for audit.
+
 ## Directory layout
 
 ```
@@ -457,12 +513,15 @@ MIT. See [LICENSE](./LICENSE).
 Early. PR-1 (HTTP + identity + signed dispatch + role whitelist),
 PR-2 (policy engine + path-level allow/deny + sensitive-keyword
 filter + pending-approval bin), PR-3 (LLM judge for the `tier_b`
-branch, with fail-safe fallback to human_required), and PR-4
+branch, with fail-safe fallback to human_required), PR-4
 (sudo-style temporary grants — peer-scoped, time-bounded grants
 that widen `allow_paths` (path grants) or override the soft tier
 (tier grants, with optional `--once` semantics), via `banling`
 + MCP; hardened against path traversal, atomic writes, strict
-JSON validation) are working with 150+ tests. PR-5 (multi-channel
-human approval: terminal + FeiShu + WeChat) and PR-6 (IM
-redundancy) are next. Bug reports
-and prompts for new role archetypes welcome — open an issue.
+JSON validation), and PR-5 (留中/pending-approval review —
+terminal / FeiShu / WeChat notification channels + unified
+`pizhun` CLI/MCP approval action + configurable timeout-sweep;
+notification is fire-and-forget and never blocks HTTP; the
+WeChat side loops through cc-connect, no extra gateway needed)
+are working with 190+ tests. PR-6 (IM redundancy) is next.
+Bug reports and prompts for new role archetypes welcome — open an issue.
