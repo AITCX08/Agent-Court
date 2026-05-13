@@ -353,6 +353,61 @@ banling example revoke 4616c19a
 
 完整双机演练见 [docs/lan-deployment.md](./docs/lan-deployment.md)。
 
+### 留中审批（PR-5）
+
+策略判定为 `human_required` 的消息落在 `bus/<peer>/pending-approval/`
+等人审。PR-5 给"等人"这一步配上**通知**和**远程审批**两条腿。
+
+**3 个通知通道**（可同时开），每个都是 best-effort —— 任何一个挂掉
+都不影响其他通道，也不阻塞 HTTP 响应：
+
+| 通道 | 怎么通知 |
+|---|---|
+| `terminal` | 写一条横幅到项目的 `shared/event.log`；如果守护进程跑在 TTY 里也往 stderr 打一份 |
+| `feishu` | POST 自定义机器人的 webhook（无需鉴权，简单 text 消息） |
+| `wechat` | shell 出去调 `cc-connect send` —— 走 cc-connect 桥推到指定的微信会话 |
+
+**配置位置**（`yamen.yaml` → `bangjiao:` 块下）：
+
+```yaml
+bangjiao:
+  enabled: true
+  shenpi:
+    enabled: true
+    channels: [terminal, feishu, wechat]
+    timeout_seconds: 0      # 0 = 永不超时；>0 表示秒数，过期后 pizhun cleanup 会自动 deny
+    feishu:
+      webhook_url: "https://open.feishu.cn/open-apis/bot/v2/hook/..."
+      mention: ["ou_xxx"]   # @ 谁，open_id 列表
+    wechat:
+      cc_connect_bin: "cc-connect"      # 默认就是 cc-connect，可指自定义路径
+      cc_connect_project: "k2work"      # 推到哪个 cc-connect project
+      cc_connect_session_key: "..."     # 哪个会话
+```
+
+**审批动作**统一走 `pizhun` —— 不管你坐在终端、飞书还是微信，最后都是
+让某个进程调这个动作。CLI 和 MCP tool 同形：
+
+```bash
+pizhun example list                    # 看待批 + 已过期
+pizhun example approve 4616c19a        # → bus/<peer>/inbox/
+pizhun example deny    4616c19a        # → bus/<peer>/denied/
+pizhun example cleanup                 # 把所有过期的批量 deny
+```
+
+MCP tools（上游 LLM 可直接调）：
+
+- `lie_liuzhong(project)` —— 列待批和已过期
+- `pizhun(project, msg_id, action)` —— `action` ∈ `{"approve", "deny"}`
+
+**微信侧的闭环**：cc-connect 推给微信用户一条提醒，告诉他消息 id；
+用户在微信里对 cc-connect 的 claude 说"approve 4616c19a"，claude 通过
+agent-yamen MCP 调 `pizhun(...)`，文件就落到 `inbox/` 完成投递。
+没有任何额外网关代码 —— 桥已经是闭环的一部分。
+
+每次审批动作（approved / denied / expired-auto-deny / 通知失败等）都追加
+到 `logs/shenpi-log.jsonl` 留档。
+
 ## 目录布局
 
 ```
@@ -447,6 +502,8 @@ PR-3（tier_b 的 LLM 裁判，失败安全回落 human_required）、
 PR-4（sudo 风格临时授权 —— peer 绑定、时效绑定的授权，
 要么放宽 `allow_paths`（path 授权），要么覆盖软层 tier
 （tier 授权，可选 `--once` 语义）；走 `banling` + MCP；
-针对路径穿越、原子写、严格 JSON 校验都做了加固）已经在跑，
-带 150+ 测试。PR-5（多通道人工审批：终端 + 飞书 + 微信）
-和 PR-6（IM 冗余）排在后面。欢迎报 bug 或提新 role 范式 —— 开 issue。
+针对路径穿越、原子写、严格 JSON 校验都做了加固）、
+PR-5（留中审批 —— 终端 / 飞书 / 微信 三通道通知 + `pizhun`
+CLI/MCP 统一审批动作 + 可配超时；通知 fire-and-forget 不阻塞
+HTTP；微信侧通过 cc-connect 桥闭环）已经在跑，带 190+ 测试。
+PR-6（IM 冗余）排在后面。欢迎报 bug 或提新 role 范式 —— 开 issue。

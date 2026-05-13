@@ -345,6 +345,46 @@ class TuiguanConfig:
 
 
 @dataclass
+class FeishuChannelConfig:
+    """PR-5 — config for the feishu (Lark) webhook notification channel."""
+    webhook_url: Optional[str] = None
+    # Mention IDs / open-ids to append to the message body. The Feishu bot
+    # API turns ``@<open-id>`` into a real mention when the bot is in the
+    # same chat as the recipient; harmless when it isn't.
+    mention: list[str] = field(default_factory=list)
+
+
+@dataclass
+class WechatChannelConfig:
+    """PR-5 — config for outbound notification via the cc-connect bridge.
+
+    ``cc_connect_project`` and ``cc_connect_session_key`` together name the
+    WeChat conversation cc-connect should push the notification into. They
+    map onto cc-connect's own ``CC_PROJECT`` + ``CC_SESSION_KEY`` env vars
+    (the same pair claude-inside-cc-connect uses to address ``cc-connect
+    send``).
+    """
+    cc_connect_bin: str = "cc-connect"          # binary on PATH
+    cc_connect_project: Optional[str] = None    # CC_PROJECT
+    cc_connect_session_key: Optional[str] = None  # CC_SESSION_KEY
+
+
+@dataclass
+class ShenpiConfig:
+    """PR-5 — config for human-approval notification + timeout sweep.
+
+    Default disabled; turning it on adds one extra step per inbound
+    ``human_required`` decision (fire-and-forget notify dispatch to each
+    enabled channel).
+    """
+    enabled: bool = False
+    channels: list[str] = field(default_factory=list)   # subset of {terminal, feishu, wechat}
+    timeout_seconds: int = 0                            # 0 = no timeout
+    feishu: FeishuChannelConfig = field(default_factory=FeishuChannelConfig)
+    wechat: WechatChannelConfig = field(default_factory=WechatChannelConfig)
+
+
+@dataclass
 class BangjiaoConfig:
     enabled: bool = False
     yamen_id: str = ""
@@ -356,6 +396,7 @@ class BangjiaoConfig:
     allow_paths: list[str] = field(default_factory=list)         # glob whitelist (PR-2 enforces)
     deny_paths: list[str] = field(default_factory=list)          # glob blacklist (PR-2 enforces)
     tuiguan: TuiguanConfig = field(default_factory=TuiguanConfig)      # PR-3 LLM judge config
+    shenpi: ShenpiConfig = field(default_factory=ShenpiConfig)         # PR-5 human-approval channels
     default_cli: str = "claude"                                   # yamen.yaml top-level — used when tuiguan.cli is unset
 
 
@@ -393,6 +434,8 @@ def load_bangjiao(project: str) -> BangjiaoConfig:
     else:
         expose_roles = [str(r) for r in raw_expose]
 
+    shenpi_cfg = _parse_shenpi_config(block.get("shenpi") or {})
+
     return BangjiaoConfig(
         enabled=enabled,
         yamen_id=block.get("yamen_id") or _default_yamen_id(project),
@@ -400,7 +443,67 @@ def load_bangjiao(project: str) -> BangjiaoConfig:
         allow_paths=list(block.get("allow_paths") or []),
         deny_paths=list(block.get("deny_paths") or []),
         tuiguan=tuiguan_cfg,
+        shenpi=shenpi_cfg,
         default_cli=str(raw.get("default_cli") or "claude"),
+    )
+
+
+_VALID_SHENPI_CHANNELS = ("terminal", "feishu", "wechat")
+
+
+def _parse_shenpi_config(block: dict) -> ShenpiConfig:
+    """Build a ShenpiConfig from the raw YAML dict, clamping invalid values
+    to safe defaults so a misconfigured ``shenpi:`` block can't silently
+    disable approval routing."""
+    enabled = bool(block.get("enabled", False))
+
+    # Channels: keep order, drop unknowns. ``terminal`` is implied when the
+    # block enables shenpi without listing channels (so a typo doesn't
+    # silently mute notifications).
+    raw_channels = block.get("channels")
+    if raw_channels is None:
+        channels = ["terminal"] if enabled else []
+    else:
+        channels = []
+        for c in raw_channels:
+            c_str = str(c).lower()
+            if c_str in _VALID_SHENPI_CHANNELS and c_str not in channels:
+                channels.append(c_str)
+
+    # Timeout: int seconds; <= 0 means "no timeout".
+    raw_timeout = block.get("timeout_seconds", 0)
+    try:
+        timeout = int(raw_timeout)
+    except (TypeError, ValueError):
+        timeout = 0
+    if timeout < 0:
+        timeout = 0
+
+    feishu_block = block.get("feishu") or {}
+    feishu = FeishuChannelConfig(
+        webhook_url=feishu_block.get("webhook_url") or None,
+        mention=[str(m) for m in (feishu_block.get("mention") or [])],
+    )
+
+    wechat_block = block.get("wechat") or {}
+    wechat = WechatChannelConfig(
+        cc_connect_bin=str(wechat_block.get("cc_connect_bin") or "cc-connect"),
+        cc_connect_project=(
+            str(wechat_block["cc_connect_project"])
+            if wechat_block.get("cc_connect_project") else None
+        ),
+        cc_connect_session_key=(
+            str(wechat_block["cc_connect_session_key"])
+            if wechat_block.get("cc_connect_session_key") else None
+        ),
+    )
+
+    return ShenpiConfig(
+        enabled=enabled,
+        channels=channels,
+        timeout_seconds=timeout,
+        feishu=feishu,
+        wechat=wechat,
     )
 
 

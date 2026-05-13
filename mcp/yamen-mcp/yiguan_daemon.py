@@ -26,6 +26,7 @@ PR-1 scope: signature verification + role whitelist enforcement
 from __future__ import annotations
 
 import argparse
+import asyncio
 import os
 import sys
 
@@ -309,6 +310,27 @@ async def _inbox(request: web.Request) -> web.Response:
         f"id={msg['id']} decision={decision.action} tier={decision.tier} "
         f"file={fpath}",
     )
+
+    # PR-5: when the policy parked this in pending-approval, fan out a
+    # notification to every configured channel (terminal / feishu / wechat).
+    # Strictly fire-and-forget — must not delay the HTTP response and must
+    # not propagate channel failures back to the sender.
+    if decision.action == "human_required" and fed.shenpi.enabled and fed.shenpi.channels:
+        try:
+            import shenpi as _shenpi
+            item = _shenpi._parse_file(project, from_court, fpath)
+        except Exception as e:  # noqa: BLE001
+            append_peer_error(project, f"shenpi-parse-failed: {e}")
+            item = None
+        if item is not None:
+            async def _fire():
+                try:
+                    await _shenpi.notify(item, shenpi_cfg=fed.shenpi)
+                except Exception as e:  # noqa: BLE001
+                    append_peer_error(project, f"shenpi-notify-crashed: {e}")
+            # Schedule on the running event loop; we are inside an
+            # aiohttp request handler so a loop is guaranteed.
+            asyncio.create_task(_fire())
 
     # Map decision → outer status. We always return 200: signature + role
     # checks already passed, so the network exchange itself is fine. The
