@@ -37,6 +37,7 @@ from typing import Optional
 import yaml
 from mcp.server.fastmcp import FastMCP
 
+import grants as _grants
 import peer_lib
 
 
@@ -486,6 +487,108 @@ def dispatch_to_peer(
         "signature_status": "signed",
         "http_status": result["http_status"],
         "response": result["response"],
+    }
+
+
+@mcp.tool()
+def grant_peer_access(
+    project: str,
+    peer_court_id: str,
+    paths: list,
+    ttl: str = "30m",
+    issued_by: str = "",
+) -> dict:
+    """Mint a temporary grant widening this project's allow_paths for one peer.
+
+    Use this when an upstream LLM decides "give Bob's court a 30-min
+    look at these specific files". The grant is durable on disk, takes
+    effect immediately, and lapses automatically after ``ttl``.
+
+    Args:
+        project: this side's project — the grant lives under this
+            project's grants/ directory.
+        peer_court_id: the remote court's ``court_id`` (as it appears
+            in peers.yaml). The grant only applies to messages whose
+            ``from_court`` matches this value.
+        paths: list of path globs the peer may attach for the duration.
+            Same dialect as ``allow_paths`` in court.yaml.
+        ttl: how long the grant is valid. Accepts ``"30m"``, ``"1h"``,
+            ``"2h30m"``, ``"1d"``, or a bare integer (seconds).
+        issued_by: optional free-form tag for the audit trail.
+
+    Returns:
+        Dict with the grant's id + expires_ts, or an ``error`` field on
+        failure. Never raises.
+    """
+    if not peer_lib.project_dir(project).is_dir():
+        return {
+            "error": "unknown_project",
+            "project": project,
+            "available": peer_lib.all_projects(),
+        }
+    try:
+        grant = _grants.mint_grant(
+            project, peer_court_id, list(paths), ttl=ttl, issued_by=issued_by,
+        )
+    except ValueError as e:
+        return {"error": "invalid_argument", "detail": str(e), "project": project}
+    return {
+        "project": project,
+        "id": grant.id,
+        "granted_to": grant.granted_to,
+        "paths": grant.paths,
+        "issued_ts": grant.issued_ts,
+        "expires_ts": grant.expires_ts,
+        "issued_by": grant.issued_by,
+    }
+
+
+@mcp.tool()
+def list_grants(project: str) -> dict:
+    """Return every grant (active + expired) recorded for the project.
+
+    Useful for "who has access right now?" status queries. The reply
+    splits grants into ``active`` and ``expired`` lists so the upstream
+    LLM can show only the live ones by default.
+    """
+    if not peer_lib.project_dir(project).is_dir():
+        return {
+            "error": "unknown_project",
+            "project": project,
+            "available": peer_lib.all_projects(),
+        }
+    active: list[dict] = []
+    expired: list[dict] = []
+    for g in _grants.list_grants(project):
+        row = {
+            "id": g.id,
+            "granted_to": g.granted_to,
+            "paths": g.paths,
+            "issued_ts": g.issued_ts,
+            "expires_ts": g.expires_ts,
+            "issued_by": g.issued_by,
+        }
+        (active if g.is_active() else expired).append(row)
+    return {"project": project, "active": active, "expired": expired}
+
+
+@mcp.tool()
+def revoke_grant(project: str, grant_id: str) -> dict:
+    """Delete a grant by id. Returns ``{"ok": true}`` if removed, else
+    an ``error`` dict."""
+    if not peer_lib.project_dir(project).is_dir():
+        return {
+            "error": "unknown_project",
+            "project": project,
+            "available": peer_lib.all_projects(),
+        }
+    removed = _grants.revoke_grant(project, grant_id)
+    if removed:
+        return {"ok": True, "project": project, "grant_id": grant_id}
+    return {
+        "error": "unknown_grant",
+        "project": project,
+        "grant_id": grant_id,
     }
 
 

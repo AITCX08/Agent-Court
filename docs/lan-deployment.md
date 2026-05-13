@@ -5,10 +5,11 @@ local network. No public IPs, no VPN — works the moment both machines
 can ping each other on the LAN.
 
 > Status: PR-1 (HTTP + signing + role whitelist), PR-2 (policy
-> engine + path/keyword gating + pending-approval bin), and PR-3
-> (LLM judge with fail-safe fallback) are live. Still ahead: PR-4
-> sudo-style temp authorization, PR-5 multi-channel human approval
-> (FeiShu/WeChat), PR-6 IM redundancy, and TLS.
+> engine + path/keyword gating + pending-approval bin), PR-3 (LLM
+> judge with fail-safe fallback), and PR-4 (sudo-style temporary
+> path grants via `court-grant`) are live. Still ahead: PR-5
+> multi-channel human approval (FeiShu/WeChat), PR-6 IM redundancy,
+> and TLS.
 
 ## Mental model first
 
@@ -303,6 +304,73 @@ specific risk surface (e.g., "treat any reference to billing
 endpoints as human_required"). The built-in prompt is intentionally
 generic.
 
+### Temporary grants (PR-4)
+
+When the *receiver* wants to let a specific peer poke at a file
+outside `allow_paths` for a short while ("just look at
+`notes/q2-plan.md` for the next 30 minutes"), they mint a grant
+instead of editing `court.yaml`. Grants are time-bounded,
+peer-scoped, and only *widen* the allow list — hardcoded denies
+(`.ssh`, `.env`, `/etc`, `credentials.json`, etc.) still win and
+the user's own `deny_paths` still win.
+
+```bash
+# Bare three-arg form is the common case: `add` is implicit.
+# Default TTL 30m; --ttl accepts 30m / 1h / 2h30m / 1d / bare seconds.
+court-grant example bob "notes/**"
+court-grant example bob "shared/draft-*.md" --ttl 2h
+
+# List active + expired grants for a project.
+court-grant example list
+# STATE   ID         PEER  EXPIRES                       PATHS
+# active  4616c19a   bob   2026-05-11T22:53:00+08:00     notes/**
+
+# Kill a grant before its TTL.
+court-grant example revoke 4616c19a
+```
+
+Each grant is a JSON file at
+`$COURT_ROOT/projects/<p>/grants/<id>.json` — durable across
+daemon restarts (no in-memory state to lose); `revoke` deletes
+the file. The daemon re-reads `grants/` on every inbound
+request, so a fresh `mint`/`revoke` takes effect on the next
+message with **no daemon reload**.
+
+The same surface is exposed via MCP for upstream LLMs that have
+been delegated this authority:
+
+```python
+grant_peer_access(
+    project="example",
+    peer_court_id="bob-laptop-example",
+    paths=["notes/**"],
+    ttl="1h",
+)
+# → {granted_to: "bob-laptop-example", id: "...",
+#    issued_ts: "...", expires_ts: "...", paths: [...]}
+
+list_grants(project="example")
+# → {project, active: [...], expired: [...]}
+
+revoke_grant(project="example", grant_id="4616c19a")
+# → {ok: true, grant_id: "4616c19a"}
+```
+
+When an inbound `attaches:` path is covered by an active grant
+(and not by `allow_paths` already), the decision's `reasons`
+will explicitly call it out — useful audit signal:
+
+```json
+{
+  "decision": "auto_pass",
+  "reasons": ["attach 'notes/q2-plan.md' covered by active grant pattern 'notes/**'"]
+}
+```
+
+Grants survive daemon restarts. Expiry is enforced at read time
+(`is_active(now)`), so a wall-clock change can't accidentally
+revive an expired grant.
+
 ### Per-peer tier (in `peers.yaml`)
 
 ```yaml
@@ -420,10 +488,13 @@ machine's firewall — most home LANs are wide open already.
   ```
   "reasons": ["attach '/etc/passwd' hits hardcoded deny '/etc/**'"]
   ```
-- Hardcoded denies cannot be lifted from `court.yaml` — by design.
-  If you genuinely need that path, restructure the dispatch (e.g.
-  paste the relevant content into the body) or have the peer add a
-  manual sudo grant (PR-4 will productize this).
+- Hardcoded denies cannot be lifted from `court.yaml` *or* by a
+  PR-4 grant — by design. If you genuinely need that path,
+  restructure the dispatch (e.g. paste the relevant content into
+  the body). For paths only blocked by your own
+  `allow_paths`/`deny_paths`, ask the peer to mint a temporary
+  grant: `court-grant <project> <your-court-id> "<glob>"` (see
+  "Temporary grants" above).
 
 ### `decision: human_required` / `status: pending_approval`
 

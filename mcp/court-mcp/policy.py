@@ -271,6 +271,7 @@ def evaluate(
     policy: PolicyConfig,
     allow_paths: list[str],
     deny_paths: list[str],
+    grant_paths: Optional[list[str]] = None,
 ) -> Decision:
     """Return the policy ``Decision`` for an inbound message.
 
@@ -288,6 +289,12 @@ def evaluate(
         User-configured globs from ``court.yaml`` ``federation:`` block.
         HARDCODED_DENY_PATHS is checked in addition (not as a
         replacement).
+    grant_paths : list[str] or None
+        PR-4 — additional path globs (loaded from active grants for
+        this peer) that widen ``allow_paths`` *only*. Grants never
+        relax hardcoded denies, never relax user deny_paths, and never
+        change the tier-based decision. Set to ``None`` or empty list
+        if no grants apply.
     """
     reasons: list[str] = []
     raw_attaches: list = list(msg.get("attaches") or [])
@@ -325,15 +332,27 @@ def evaluate(
             return Decision(action="denied", tier="hard_rule", reasons=reasons)
 
     # 3. User allow paths: if specified, every attach must match one.
+    # Grants (PR-4) widen this list for the duration of the grant — they
+    # cannot turn a permissive (empty) allow_paths into a restrictive one,
+    # but they can let a specific path through an existing restriction.
     if allow_paths and normalized:
+        effective_allow = list(allow_paths) + list(grant_paths or [])
         for path in normalized:
-            if not _match_any(path, allow_paths):
+            hit = _match_any(path, effective_allow)
+            if hit is None:
                 reasons.append(
-                    f"attach '{path}' not covered by allow_paths {allow_paths} "
-                    f"→ forcing human_required"
+                    f"attach '{path}' not covered by allow_paths "
+                    f"{allow_paths} (no active grant either) → forcing human_required"
                 )
                 return Decision(
                     action="human_required", tier="hard_rule", reasons=reasons,
+                )
+            # If the match came from grant_paths (not the static list)
+            # note it in the audit trail so a reviewer can see *why* an
+            # otherwise-disallowed path got through.
+            if grant_paths and hit in grant_paths and hit not in allow_paths:
+                reasons.append(
+                    f"attach '{path}' covered by active grant pattern '{hit}'"
                 )
 
     # 4. Sensitive keywords (hardcoded + policy extras).

@@ -196,6 +196,8 @@ Claude Code now sees the full local-MCP toolset:
 | `read_upstream_inbox(project)` | The user asks "any updates from `<project>`?" (foreman's replies live here). |
 | `list_peers(project)` | The user asks about federation status for a project. |
 | `dispatch_to_peer(project, peer_court_id, message, ...)` | The user wants to forward something to a federated court. |
+| `grant_peer_access(project, peer_court_id, paths, ttl?)` | The user wants to temporarily widen what a peer's `attaches:` may reference. |
+| `list_grants(project)` / `revoke_grant(project, id)` | The user wants to inspect or kill an outstanding grant. |
 
 Local MCP tools have **full machine access** — they read and write
 anywhere under `$COURT_ROOT/projects/<p>/`. The restriction surface lives
@@ -304,6 +306,32 @@ Every decision is appended to
 See [docs/lan-deployment.md](./docs/lan-deployment.md) for a full
 example with the `attaches:` field.
 
+### Temporary grants (PR-4)
+
+When `allow_paths` is too narrow for a one-off ("Bob, look at
+`notes/q2-plan.md` real quick"), the receiver can mint a
+time-bounded, peer-scoped widening of the allow list — a sudo
+moment, not a config change. Hardcoded denies still win; this
+only widens `allow_paths`.
+
+```bash
+# 30-minute grant for Bob to attach anything under notes/
+court-grant example bob "notes/**"
+# explicit TTL — accepts 30m / 1h / 2h30m / 1d / bare seconds
+court-grant example bob "shared/draft-*.md" --ttl 2h
+
+court-grant example list
+# STATE   ID         PEER  EXPIRES                  PATHS
+# active  4616c19a   bob   2026-05-11T22:53:00+...  notes/**
+
+court-grant example revoke 4616c19a
+```
+
+Grants are JSON files under `$COURT_ROOT/projects/<p>/grants/` —
+durable across daemon restarts; `revoke` deletes the file. From an
+upstream LLM the same surface is exposed as
+`grant_peer_access` / `list_grants` / `revoke_grant`.
+
 For a full two-machine walk-through see [docs/lan-deployment.md](./docs/lan-deployment.md).
 
 ## Directory layout
@@ -318,6 +346,8 @@ $COURT_ROOT/                                  # default ~/.agent-court
 │       ├── identity/                         # this project's keypair (mode 0600/0644)
 │       │   ├── priv.key
 │       │   └── pub.key
+│       ├── grants/                           # PR-4: one JSON file per active/expired grant
+│       │   └── <id>.json
 │       ├── prompts/
 │       │   ├── foreman.md
 │       │   ├── frontend.md
@@ -338,7 +368,7 @@ $COURT_ROOT/                                  # default ~/.agent-court
 
 The repository itself (this one) only ships:
 - `bin/` — shell scripts (`court-up`, `court-down`, `court-watcher`,
-  `court-send`, `role-launch`, `court-keygen`, `court-peer`)
+  `court-send`, `role-launch`, `court-keygen`, `court-peer`, `court-grant`)
 - `mcp/court-mcp/` — the Python MCP server + peer daemon + keygen
 - `projects/example/` — a fork-me example project (with a commented-out
   `federation:` block as schema reference)
@@ -397,9 +427,10 @@ MIT. See [LICENSE](./LICENSE).
 
 Early. PR-1 (HTTP + identity + signed dispatch + role whitelist),
 PR-2 (policy engine + path-level allow/deny + sensitive-keyword
-filter + pending-approval bin), and PR-3 (LLM judge for the `tier_b`
-branch, with fail-safe fallback to human_required) are working but
-lightly tested. PR-4 (sudo-style temp authorization) is next; after
-that, PR-5 (multi-channel human approval: terminal + FeiShu +
-WeChat), PR-6 (IM redundancy). Bug reports and prompts for new role
-archetypes welcome — open an issue.
+filter + pending-approval bin), PR-3 (LLM judge for the `tier_b`
+branch, with fail-safe fallback to human_required), and PR-4
+(sudo-style temporary path grants — peer-scoped, time-bounded
+widening of `allow_paths`, via `court-grant` + MCP) are working
+but lightly tested. PR-5 (multi-channel human approval: terminal
++ FeiShu + WeChat) and PR-6 (IM redundancy) are next. Bug reports
+and prompts for new role archetypes welcome — open an issue.

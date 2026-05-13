@@ -31,6 +31,7 @@ import sys
 
 from aiohttp import web
 
+import grants
 import judge
 import policy
 from peer_lib import (
@@ -242,13 +243,17 @@ async def _inbox(request: web.Request) -> web.Response:
 
     # PR-2 policy layer — runs after signature + role whitelist pass.
     # peer_tier comes from peers.yaml entry, falls back to policy.default_tier.
+    # PR-4: pull this peer's active grants and pass them in to widen
+    # allow_paths for the duration of each grant.
     policy_cfg = policy.load_policy(project)
+    grant_paths = grants.load_grants_for_peer(project, from_court)
     decision = policy.evaluate(
         msg,
         peer_tier=peer.policy_tier,
         policy=policy_cfg,
         allow_paths=fed.allow_paths,
         deny_paths=fed.deny_paths,
+        grant_paths=grant_paths,
     )
 
     # PR-3 — refine the `judge` tier via an LLM call. Anything else
