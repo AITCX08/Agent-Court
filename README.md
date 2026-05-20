@@ -148,6 +148,23 @@ git.k2lab.ai issue assigned to me
 | court (默认) | `gitea-watcher start` / `gitea-watcher --once` | 黑盒自动准入并直接起 court | 稳定批量处理 |
 | dashboard | `gitea-watcher dashboard` | 双通道审批 + tmux 控制塔 + 独立 issue window | 需要人工观察和远程批示 |
 
+## webhook 模式 (PR-14)
+
+把上面两种模式的 30s 轮询升级为 **git.k2lab.ai 内网 webhook 秒级推送主路径 + 5min 轮询兜底**:
+
+```bash
+# 1. 录 Keychain (注意 service 跟 PR-12 oauth2 token 分离)
+security add-generic-password -s git.k2lab.ai-webhook -a webhook-secret -w <SECRET>
+
+# 2. 起 receiver
+bin/gitea-webhook-receiver install --port 8765
+bin/gitea-webhook-receiver start
+
+# 3. Gitea 后台配 webhook: http://<内网IP>:8765/gitea/webhook
+```
+
+webhook 是 **新增上游入口**, 不影响 court / dashboard 核心逻辑. 详见 `docs/webhook-mode.md`.
+
 ## 快速上手
 
 ### 一键 onboard (macOS, PR-7)

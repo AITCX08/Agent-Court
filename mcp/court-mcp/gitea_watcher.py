@@ -50,6 +50,7 @@ class GiteaWatcher:
         self.court_root = court_root or Path(os.environ.get("COURT_ROOT", str(Path.home() / ".agent-court")))
         self.state_dir = self.court_root / "gitea-watcher"
         self.pending_dir = self.state_dir / "pending-shenli"
+        self.pending_webhook_dir = self.state_dir / "pending-webhook"
         self.seen_path = self.state_dir / "seen-issues.json"
         self.error_path = self.state_dir / "error-state.json"
         self.client = client or GiteaClient()
@@ -77,9 +78,12 @@ class GiteaWatcher:
         self._ensure_dirs()
         with self._state_lock():
             seen = self._load_json(self.seen_path, {})
+            # PR-14: 优先消费 pending-webhook (receiver 已落盘的事件),
+            # 再走 polling. webhook 事件强制视为 new (不走 bootstrap 跳过).
+            webhook_items, webhook_delivery_map = self._consume_pending_webhook()
             issues = self.client.list_assigned_issues(state="open")
             queued = self._merge_retry_candidates(issues, seen)
-            if not seen:
+            if not seen and not webhook_items:
                 bootstrap = {
                     self._issue_key(item): {
                         "repo": self._issue_repo(item),
@@ -95,6 +99,13 @@ class GiteaWatcher:
                 return {"new": 0, "updated": 0, "errors": 0}
 
             new_items, updated_items = self._diff(queued, seen)
+            # webhook 来的 issue 强制进 new (绕过 _diff bootstrap 跳过), 跟 polling new dedup
+            existing_keys = {self._issue_key(item) for item in new_items + updated_items}
+            for w_item in webhook_items:
+                if self._issue_key(w_item) not in existing_keys:
+                    new_items.append(w_item)
+                    existing_keys.add(self._issue_key(w_item))
+
             for item in [*new_items, *updated_items]:
                 key = self._issue_key(item)
                 try:
@@ -123,6 +134,13 @@ class GiteaWatcher:
                 for extra_key in ("intake_slug_id", "intake_msg_id"):
                     if result.get(extra_key):
                         entry[extra_key] = result[extra_key]
+                # PR-14: source 标记 + webhook event id
+                delivery = webhook_delivery_map.get(key)
+                if delivery:
+                    entry["source"] = "webhook"
+                    entry["webhook_event_id"] = delivery
+                else:
+                    entry["source"] = "polling"
                 seen[key] = entry
 
             self._drain_upstream_inboxes(seen)
@@ -357,6 +375,46 @@ class GiteaWatcher:
                     self.client.comment_on_issue(repo, number, f"court 回执：\n\n{text}")
                 shutil.move(str(file), str(done_dir / file.name))
 
+    def _consume_pending_webhook(self) -> tuple[list[dict[str, Any]], dict[str, str]]:
+        """PR-14: 读 pending-webhook/*.json, 提取 issue + 归档处理过的.
+
+        返回 (issue 列表, key→delivery_id 映射). 失败/无文件返 ([], {}).
+
+        webhook payload 里 issue 没有 ``repository`` 嵌套字段 (Gitea 把 repo 放 payload 顶层),
+        这里手动注入让它跟 ``client.list_assigned_issues()`` 返回结构兼容,
+        ``_issue_repo()`` 等 PR-12 helper 不用改.
+        """
+        if not self.pending_webhook_dir.is_dir():
+            return [], {}
+        items: list[dict[str, Any]] = []
+        delivery_map: dict[str, str] = {}
+        processed_dir = self.pending_webhook_dir / ".processed"
+        processed_dir.mkdir(parents=True, exist_ok=True)
+        for path in sorted(self.pending_webhook_dir.glob("*.json")):
+            try:
+                payload = json.loads(path.read_text())
+                issue = payload.get("issue")
+                repository = payload.get("repository")
+                if not issue:
+                    path.rename(processed_dir / f"{path.stem}.no-issue.json")
+                    continue
+                # Gitea webhook payload.issue 没 repository, 这里注入让 _issue_repo() OK
+                if repository and not issue.get("repository"):
+                    issue["repository"] = repository
+                items.append(issue)
+                delivery = (payload.get("delivery") or "").strip()
+                if delivery:
+                    key = self._issue_key(issue)
+                    delivery_map[key] = delivery
+                path.rename(processed_dir / path.name)
+            except (json.JSONDecodeError, OSError, KeyError) as exc:
+                print(f"[gitea-watcher] webhook payload {path.name} 跳过: {exc!r}", file=sys.stderr)
+                try:
+                    path.rename(processed_dir / f"{path.stem}.error.json")
+                except OSError:
+                    pass
+        return items, delivery_map
+
     def _count_active_issue_projects(self) -> int:
         projects_dir = self.court_root / "projects"
         if not projects_dir.exists():
@@ -442,7 +500,9 @@ def main() -> int:
     run_once = sub.add_parser("run-once")
     run_once.add_argument("--mode", default=os.environ.get("WATCHER_MODE", "court"))
     p = sub.add_parser("loop")
-    p.add_argument("--poll-interval", type=int, default=30)
+    # PR-14: 默认轮询周期从 30s -> 300s (5min), webhook 主推后轮询只是兜底.
+    # 老用户 env WATCHER_POLL_INTERVAL=30 仍生效.
+    p.add_argument("--poll-interval", type=int, default=int(os.environ.get("WATCHER_POLL_INTERVAL", "300")))
     p.add_argument("--mode", default=os.environ.get("WATCHER_MODE", "court"))
     status = sub.add_parser("status")
     status.add_argument("--mode", default=os.environ.get("WATCHER_MODE", "court"))

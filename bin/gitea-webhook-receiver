@@ -1,0 +1,124 @@
+#!/usr/bin/env bash
+# gitea-webhook-receiver: 内网 webhook 接收器启停 (PR-14)
+#
+# 用法:
+#   bin/gitea-webhook-receiver install [--port 8765]
+#   bin/gitea-webhook-receiver start | stop | status | logs
+#   bin/gitea-webhook-receiver foreground       # 前台跑 (调试用)
+#
+# secret 录入 (install 前必做):
+#   security add-generic-password -s git.k2lab.ai-webhook -a webhook-secret -w <SECRET>
+#
+set -euo pipefail
+
+ROOT="${COURT_ROOT:-$HOME/.agent-court}"
+REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+PY_DIR="$REPO_ROOT/mcp/court-mcp"
+PYTHON_BIN="$PY_DIR/.venv/bin/python3"
+if [ ! -x "$PYTHON_BIN" ]; then
+  PYTHON_BIN="python3"
+fi
+PLIST_NAME="ai.k2lab.gitea-webhook-receiver.plist"
+TARGET_PLIST="$HOME/Library/LaunchAgents/$PLIST_NAME"
+TEMPLATE="$REPO_ROOT/docs/launchd/ai.k2lab.gitea-webhook-receiver.plist.template"
+
+usage() {
+  cat <<'EOF'
+usage: gitea-webhook-receiver <install [--port N]|start|stop|status|logs|foreground|help>
+
+环境变量:
+  WEBHOOK_PORT      监听端口 (default 8765)
+  WEBHOOK_BIND      监听地址 (default 0.0.0.0; 内网 IP 也可填具体的)
+  WEBHOOK_ASSIGNEE  假 assignee 名 (default 调 GiteaClient.whoami())
+  COURT_ROOT        状态根目录 (default ~/.agent-court)
+EOF
+}
+
+check_secret() {
+  if ! cd "$PY_DIR" && "$PYTHON_BIN" -m webhook_secret check >/dev/null 2>&1; then
+    echo "[webhook-receiver] 缺少 webhook secret. 请先录入:" >&2
+    echo "  security add-generic-password -s git.k2lab.ai-webhook -a webhook-secret -w <SECRET>" >&2
+    echo "或设环境变量 K2LAB_WEBHOOK_SECRET=<SECRET>" >&2
+    return 1
+  fi
+}
+
+cmd="${1:-help}"
+case "$cmd" in
+  foreground)
+    shift || true
+    check_secret
+    cd "$PY_DIR"
+    exec "$PYTHON_BIN" -m gitea_webhook_receiver "$@"
+    ;;
+
+  install)
+    shift || true
+    INSTALL_PORT="8765"
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --port)
+          INSTALL_PORT="${2:-8765}"; shift 2 ;;
+        --port=*)
+          INSTALL_PORT="${1#--port=}"; shift ;;
+        *)
+          echo "[gitea-webhook-receiver install] unknown arg: $1" >&2; exit 1 ;;
+      esac
+    done
+    check_secret
+    if [ ! -f "$TEMPLATE" ]; then
+      echo "[gitea-webhook-receiver install] missing template: $TEMPLATE" >&2
+      exit 1
+    fi
+    # PR-14 review W2: 端口预检, 占用就警告 (不阻止 install, 但用户该知道)
+    if command -v lsof >/dev/null 2>&1 && lsof -i ":$INSTALL_PORT" >/dev/null 2>&1; then
+      echo "[gitea-webhook-receiver install] WARNING: port $INSTALL_PORT 已被其它进程占用:" >&2
+      lsof -i ":$INSTALL_PORT" 2>&1 | head -3 >&2
+      echo "[gitea-webhook-receiver install] 仍继续 install, 但 start 时会失败. 换 --port 或先 kill 占用者." >&2
+    fi
+    mkdir -p "$HOME/Library/LaunchAgents"
+    sed \
+      -e "s#__HOME__#$HOME#g" \
+      -e "s#__REPO_ROOT__#$REPO_ROOT#g" \
+      -e "s#__COURT_ROOT__#$ROOT#g" \
+      -e "s#__PORT__#$INSTALL_PORT#g" \
+      "$TEMPLATE" > "$TARGET_PLIST"
+    echo "$TARGET_PLIST (port=$INSTALL_PORT)"
+    ;;
+
+  start)
+    if [ ! -f "$TARGET_PLIST" ]; then
+      echo "[gitea-webhook-receiver] 未 install. 先跑: $0 install [--port N]" >&2
+      exit 1
+    fi
+    launchctl unload "$TARGET_PLIST" >/dev/null 2>&1 || true
+    launchctl load "$TARGET_PLIST"
+    echo "started"
+    ;;
+
+  stop)
+    # PR-14 review W3: 抑制 unload 错误, stop 已停的 receiver 不该退非零
+    if [ -f "$TARGET_PLIST" ]; then
+      launchctl unload "$TARGET_PLIST" >/dev/null 2>&1 || true
+    fi
+    echo "stopped"
+    ;;
+
+  status)
+    launchctl list | grep 'ai.k2lab.gitea-webhook-receiver' || echo "not loaded"
+    ;;
+
+  logs)
+    tail -n 50 "$HOME/Library/Logs/gitea-webhook-receiver.out.log" "$HOME/Library/Logs/gitea-webhook-receiver.err.log" 2>/dev/null || echo "no logs yet"
+    ;;
+
+  help|-h|--help)
+    usage
+    ;;
+
+  *)
+    echo "[gitea-webhook-receiver] unknown command: $cmd" >&2
+    usage >&2
+    exit 1
+    ;;
+esac
