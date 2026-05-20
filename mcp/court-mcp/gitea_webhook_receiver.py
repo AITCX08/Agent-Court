@@ -32,11 +32,14 @@ from typing import Any, Iterable
 
 from aiohttp import web
 
+from log import get_logger
 from webhook_secret import WebhookSecretMissing, get_webhook_secret
 
 
 ALLOWED_ACTIONS = {"opened", "assigned", "edited", "reopened"}
 ALLOWED_EVENTS = {"issues"}
+
+_log = get_logger("webhook-receiver")
 
 
 def _state_dir() -> Path:
@@ -45,10 +48,6 @@ def _state_dir() -> Path:
 
 def _pending_dir(state_dir: Path | None = None) -> Path:
     return (state_dir or _state_dir()) / "pending-webhook"
-
-
-def _log(msg: str) -> None:
-    print(f"[webhook-receiver] {msg}", file=sys.stderr, flush=True)
 
 
 def _verify_signature(secret: str, raw_body: bytes, header_sig: str) -> bool:
@@ -112,9 +111,9 @@ def _resolve_allowed_users(env: dict[str, str] | None = None) -> set[str] | None
         if user:
             return {user}
     except Exception as exc:
-        _log(f"WARNING whoami 失败, fall back to fail-open (接收所有 assignee): {exc!r}")
+        _log.warning(event="whoami_failed_fail_open", error=repr(exc))
         if env.get("WEBHOOK_REQUIRE_ASSIGNEE_FILTER", "").strip() == "1":
-            _log("WEBHOOK_REQUIRE_ASSIGNEE_FILTER=1, 拒绝 fail-open, raise.")
+            _log.error(event="whoami_failed_strict_mode_raise", error=repr(exc))
             raise
     return None
 
@@ -138,14 +137,17 @@ def create_app(*, state_dir: Path | None = None, secret: str | None = None, allo
         try:
             raw_body = await request.read()
         except Exception as exc:
-            _log(f"read body failed: {exc!r}")
+            _log.warning(event="read_body_failed", error=repr(exc))
             return web.Response(status=200, text="bad-body-acked")
 
         sig = request.headers.get("X-Gitea-Signature", "")
         if not _verify_signature(secret, raw_body, sig):
             # PR-14 review C1 fix: 按 plan D8 一律 ack 200 防 Gitea 重试风暴.
             # 安全性靠 secret 校验 + 内网部署, 不靠 401 status code.
-            _log(f"invalid signature dropped; delivery={request.headers.get('X-Gitea-Delivery', '?')}")
+            _log.warning(
+                event="invalid_signature_dropped",
+                delivery=request.headers.get("X-Gitea-Delivery", "?"),
+            )
             return web.Response(status=200, text="invalid-signature dropped")
 
         event = request.headers.get("X-Gitea-Event", "")
@@ -155,7 +157,7 @@ def create_app(*, state_dir: Path | None = None, secret: str | None = None, allo
         try:
             payload = json.loads(raw_body.decode("utf-8"))
         except json.JSONDecodeError as exc:
-            _log(f"invalid json body: {exc!r}")
+            _log.warning(event="invalid_json_body", error=repr(exc))
             return web.Response(status=200, text="bad-json-acked")
 
         action = (payload.get("action") or "").lower()
@@ -183,11 +185,11 @@ def create_app(*, state_dir: Path | None = None, secret: str | None = None, allo
         try:
             _atomic_write_payload(dest, wrapper)
         except OSError as exc:
-            _log(f"failed to write payload: {exc!r}")
+            _log.error(event="payload_write_failed", error=repr(exc), dest=dest.name)
             # 内部错误也 ack 200 防 Gitea 重试风暴
             return web.Response(status=200, text="internal-error-acked")
 
-        _log(f"accepted action={action} delivery={delivery} dest={dest.name}")
+        _log.info(event="webhook_accepted", action=action, delivery=delivery, dest=dest.name)
         return web.json_response({"ok": True, "delivery": delivery})
 
     app = web.Application(client_max_size=2 * 1024 * 1024)
@@ -202,7 +204,7 @@ async def _run_app(host: str, port: int) -> None:
     await runner.setup()
     site = web.TCPSite(runner, host=host, port=port)
     await site.start()
-    _log(f"listening on {host}:{port}")
+    _log.info(event="listening", host=host, port=port)
     while True:
         await asyncio.sleep(3600)
 
@@ -215,17 +217,17 @@ def main(argv: list[str] | None = None) -> int:
     try:
         asyncio.run(_run_app(args.bind, args.port))
     except WebhookSecretMissing as exc:
-        _log(str(exc))
+        _log.error(event="secret_missing", error=str(exc))
         return 1
     except KeyboardInterrupt:
         return 0
     except OSError as exc:
         # PR-14 review C2 fix: bind 失败 (端口被占) 等 OSError 必须非零退出,
         # 否则 launchd 以为正常退出不会重启. 用 4 跟 plan 文档约定一致.
-        _log(f"startup failed (OSError): {exc}")
+        _log.error(event="startup_oserror", error=str(exc))
         return 4
     except Exception as exc:
-        _log(f"unexpected startup error: {exc!r}")
+        _log.exception(event="startup_failed", error=repr(exc))
         return 4
     return 0
 

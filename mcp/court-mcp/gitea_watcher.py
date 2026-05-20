@@ -28,8 +28,11 @@ from gitea_client import (
     GiteaServerError,
     GiteaTransportError,
 )
+from log import get_logger
 
 SAFE_ENV_KEYS = {"PATH", "HOME", "USER", "SHELL", "TERM", "TMPDIR", "COURT_ROOT", "LANG", "LC_ALL"}
+
+_log = get_logger("watcher")
 
 
 def _iso_now() -> str:
@@ -295,7 +298,7 @@ class GiteaWatcher:
                 safe_env = self._safe_subprocess_env()
                 migrate_cmd = [str(self.bin_dir / "migrate-to-court"), "--new", project_name, "--plan", temp.name, "--if-not-exists"]
                 if court_dir.exists():
-                    print(f"[gitea-watcher] reusing existing court project: {project_name}", file=sys.stderr)
+                    _log.info(event="court_project_reused", project=project_name)
                 else:
                     subprocess.run(migrate_cmd, env=safe_env, check=True)
                 court_env = self._safe_subprocess_env()
@@ -408,7 +411,7 @@ class GiteaWatcher:
                     delivery_map[key] = delivery
                 path.rename(processed_dir / path.name)
             except (json.JSONDecodeError, OSError, KeyError) as exc:
-                print(f"[gitea-watcher] webhook payload {path.name} 跳过: {exc!r}", file=sys.stderr)
+                _log.warning(event="webhook_payload_skip", file=path.name, error=repr(exc))
                 try:
                     path.rename(processed_dir / f"{path.stem}.error.json")
                 except OSError:

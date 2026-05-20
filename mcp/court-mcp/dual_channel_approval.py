@@ -16,10 +16,13 @@ from typing import Any
 
 import bangjiao
 import shenpi
+from log import get_logger
 
 
 DEFAULT_PROJECT = "gitea-watcher"
 DEFAULT_PEER = "dashboard"
+
+_log = get_logger("approval")
 
 
 def _iso_now() -> str:
@@ -244,7 +247,7 @@ class ApprovalStore:
         try:
             asyncio.run(shenpi.notify(item, shenpi_cfg=cfg))
         except Exception as exc:  # pragma: no cover - defensive
-            print(f"[approval] notify failed: {exc}", file=sys.stderr, flush=True)
+            _log.error(event="im_notify_failed", error=str(exc), msg_id=item.msg_id)
 
     def _drain_shenpi_bus(self, meta: dict[str, Any]) -> None:
         msg_id = meta["msg_id"]
