@@ -22,10 +22,37 @@ from typing import Any
 
 import seen_state
 
+# Sentinel: 区分 caller 没传 (auto-load) vs 显式传 None (禁用)
+_AUTO_LOAD = object()
+
 
 def _iso_now() -> str:
     from datetime import datetime, timezone
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def _iso_older_than(ts_iso: str, ref_iso: str, seconds: float) -> bool:
+    """ts_iso 比 ref_iso 早 ``seconds`` 秒以上? 解析失败返 False (保守)."""
+    from datetime import datetime
+    if not ts_iso or not ref_iso:
+        return False
+    try:
+        ts = datetime.fromisoformat(ts_iso.replace("Z", "+00:00"))
+        ref = datetime.fromisoformat(ref_iso.replace("Z", "+00:00"))
+    except ValueError:
+        return False
+    return (ref - ts).total_seconds() > seconds
+
+
+def _split_issue_key(key: str) -> tuple[str, int]:
+    """``foo/bar#12`` → (``foo/bar``, 12). 解析失败返 (key, 0)."""
+    repo, sep, num_str = key.partition("#")
+    if not sep:
+        return key, 0
+    try:
+        return repo, int(num_str)
+    except ValueError:
+        return repo, 0
 
 
 class ImReplyRouter:
@@ -36,6 +63,9 @@ class ImReplyRouter:
         poll_interval: float = 1.0,
         gitea_client=None,
         spawn_window_bin: Path | None = None,
+        workflow_config: "Any" = _AUTO_LOAD,
+        retry_queue: "Any" = _AUTO_LOAD,
+        active_court_counter: "callable | None" = None,
     ) -> None:
         self.court_root = court_root
         self.poll_interval = poll_interval
@@ -48,6 +78,72 @@ class ImReplyRouter:
         self._gitea_client = gitea_client
         # 默认 bin 路径: <repo_root>/bin/spawn-issue-window
         self.spawn_window_bin = spawn_window_bin or (Path(__file__).resolve().parents[2] / "bin" / "spawn-issue-window")
+        # SY-4 #17: bounded concurrency + retry/backoff
+        # workflow_config / retry_queue 用 _AUTO_LOAD sentinel 区分:
+        #   - caller 不传 → 自动 load (生产路径)
+        #   - caller 显式传 None → 禁用 (测试 / 灾难逃生)
+        #   - caller 传具体值 → 用 caller 的 (测试注入 / DI)
+        if workflow_config is _AUTO_LOAD:
+            self.workflow_config = self._maybe_load_workflow_config()
+        else:
+            self.workflow_config = workflow_config
+        if retry_queue is _AUTO_LOAD:
+            self.retry_queue = self._build_retry_queue()
+        else:
+            self.retry_queue = retry_queue
+        # Override-able 钩子: 让测试可注入假 counter
+        self._active_court_counter = active_court_counter or self._count_active_courts_via_tmux
+
+    @staticmethod
+    def _maybe_load_workflow_config() -> "Any | None":
+        try:
+            from workflow_loader import load_workflow
+            repo_root = Path(__file__).resolve().parents[2]
+            return load_workflow(repo_root).config
+        except Exception:
+            return None
+
+    def _build_retry_queue(self):
+        try:
+            from retry_queue import (
+                DEFAULT_BACKOFF_BASE_SECONDS,
+                DEFAULT_MAX_ATTEMPTS,
+                RetryQueue,
+            )
+        except ImportError:
+            return None
+        cfg = self.workflow_config
+        return RetryQueue(
+            state_dir=self.court_root / "gitea-watcher",
+            max_attempts=getattr(cfg, "retry_max", DEFAULT_MAX_ATTEMPTS) if cfg else DEFAULT_MAX_ATTEMPTS,
+            base_backoff_seconds=getattr(cfg, "retry_backoff_base_seconds", DEFAULT_BACKOFF_BASE_SECONDS) if cfg else DEFAULT_BACKOFF_BASE_SECONDS,
+        )
+
+    def _count_active_courts_via_tmux(self) -> int:
+        """数 dashboard session 里非 watcher 的 window. 失败返 0 (保守不阻 dispatch)."""
+        try:
+            from dashboard_tmux import SESSION_NAME, WATCHER_WINDOW
+            result = subprocess.run(
+                ["tmux", "list-windows", "-t", SESSION_NAME, "-F", "#{window_name}"],
+                capture_output=True,
+                text=True,
+                timeout=2,
+            )
+            if result.returncode != 0:
+                return 0
+            names = [n.strip() for n in result.stdout.splitlines() if n.strip()]
+            return sum(1 for n in names if n != WATCHER_WINDOW)
+        except (FileNotFoundError, subprocess.TimeoutExpired, Exception):
+            return 0
+
+    def _at_capacity(self) -> bool:
+        cfg = self.workflow_config
+        if cfg is None:
+            return False  # 没配置时不限制, 老行为
+        cap = getattr(cfg, "max_concurrent_runs", 0)
+        if cap <= 0:
+            return False
+        return self._active_court_counter() >= cap
 
     def start(self) -> None:
         if self._thread and self._thread.is_alive():
@@ -86,7 +182,112 @@ class ImReplyRouter:
                 print(f"[router] handle {result_path.name} failed: {exc!r}", file=sys.stderr, flush=True)
             self._seen_results.add(result_path.name)
             count += 1
+        # SY-4 review R-1: 也消费 retry queue 到点条目; 没人 tick → defer 的 issue 永远卡
+        count += self._retry_due_items()
+        # SY-4 review Mi-2: 也扫超时的 court window
+        count += self._enforce_run_timeout()
         return count
+
+    def _retry_due_items(self) -> int:
+        """SY-4 review R-1: 把 retry queue 里到点的 issue 拿回来重新 dispatch.
+
+        从 intake_context 找回 issue+decision+comments, 从 seen-issues 取历史 winner,
+        重新走 _dispatch_approved (含 capacity check + 再失败再 push).
+        """
+        if self.retry_queue is None:
+            return 0
+        try:
+            due_keys = self.retry_queue.pop_due()
+        except Exception as exc:  # pragma: no cover - defensive
+            print(f"[router] retry pop_due failed: {exc!r}", file=sys.stderr, flush=True)
+            return 0
+        n = 0
+        for key in due_keys:
+            try:
+                repo, sep, num_str = key.partition("#")
+                if not sep:
+                    continue
+                num = int(num_str)
+            except ValueError:
+                continue
+            ctx = self._load_intake_context(repo, num)
+            if ctx is None:
+                # context 丢了, 没法恢复; 不重新 push (会无限循环)
+                print(f"[router] retry skip {key}: missing intake context", file=sys.stderr, flush=True)
+                continue
+            try:
+                seen = seen_state.load_seen(self.court_root / "gitea-watcher")
+            except OSError:
+                seen = {}
+            entry = seen.get(key, {}) if isinstance(seen, dict) else {}
+            winner = entry.get("approval_winner", "retry")
+            try:
+                self._dispatch_approved(repo, num, ctx, winner)
+                n += 1
+            except Exception as exc:  # pragma: no cover - defensive
+                print(f"[router] retry dispatch {key} failed: {exc!r}", file=sys.stderr, flush=True)
+        return n
+
+    def _enforce_run_timeout(self) -> int:
+        """SY-4 review Mi-2: 跑超时的 court window 强制 kill + 进 retry queue.
+
+        timeout 来源 WORKFLOW.md run_timeout_seconds (cfg 缺失则不 enforce).
+        判定: seen-issues entry 有 dispatched_at 且距今 > timeout → kill window.
+        """
+        cfg = self.workflow_config
+        if cfg is None:
+            return 0
+        timeout_s = getattr(cfg, "run_timeout_seconds", 0)
+        if not timeout_s or timeout_s <= 0:
+            return 0
+        try:
+            seen = seen_state.load_seen(self.court_root / "gitea-watcher")
+        except OSError:
+            return 0
+        if not isinstance(seen, dict):
+            return 0
+        now_iso = _iso_now()
+        n = 0
+        for key, entry in list(seen.items()):
+            if not isinstance(entry, dict):
+                continue
+            if entry.get("last_action") != "DISPATCHED_DASHBOARD":
+                continue
+            dispatched_at = entry.get("dispatched_at", "")
+            if not _iso_older_than(dispatched_at, now_iso, timeout_s):
+                continue
+            window_name = entry.get("tmux_window") or ""
+            if not window_name:
+                continue
+            try:
+                self._kill_tmux_window(window_name)
+            except Exception as exc:  # pragma: no cover - defensive
+                print(f"[router] timeout kill {key} ({window_name}) failed: {exc!r}", file=sys.stderr, flush=True)
+                continue
+            if self.retry_queue is not None:
+                self.retry_queue.push(key, f"timeout after {timeout_s}s")
+            seen_state.update_entry(
+                _split_issue_key(key)[0], _split_issue_key(key)[1],
+                {
+                    "last_action": "TIMEOUT_KILLED",
+                    "timeout_killed_at": now_iso,
+                },
+            )
+            print(f"[router] timeout kill {key} ({window_name}, after {timeout_s}s)", file=sys.stderr, flush=True)
+            n += 1
+        return n
+
+    def _kill_tmux_window(self, window_name: str) -> None:
+        """安全 kill: 校验 window 名只含 path-safe 字符."""
+        if not window_name or "/" in window_name or any(c in window_name for c in (" ", ";", "&", "|", "$", "`")):
+            raise ValueError(f"unsafe window name: {window_name!r}")
+        from dashboard_tmux import SESSION_NAME
+        subprocess.run(
+            ["tmux", "kill-window", "-t", f"{SESSION_NAME}:{window_name}"],
+            capture_output=True,
+            timeout=3,
+            check=False,
+        )
 
     def _handle_intake_result(self, result_path: Path) -> None:
         try:
@@ -120,6 +321,20 @@ class ImReplyRouter:
         issue = ctx["issue"]
         decision = ctx["decision"]
         comments = ctx.get("comments", [])
+        issue_key = f"{repo}#{num}"
+
+        # SY-4 #17: 容量上限. 超 max_concurrent_runs → 进 retry queue 等下个 tick
+        if self._at_capacity():
+            if self.retry_queue is not None:
+                self.retry_queue.push(issue_key, "deferred: at concurrency cap")
+            seen_state.update_entry(repo, num, {
+                "last_action": "DEFERRED_CAPACITY",
+                "approval_winner": winner,
+                "stage": "INTAKE",
+                "deferred_at": _iso_now(),
+            })
+            print(f"[router] deferred {issue_key}: at concurrency cap", file=sys.stderr, flush=True)
+            return
 
         # 写 intro 给 spawn-issue-window 加载
         from issue_resolver import build_intro_message
@@ -136,6 +351,9 @@ class ImReplyRouter:
             )
         except subprocess.CalledProcessError as exc:
             print(f"[router] spawn-issue-window failed for {repo}#{num}: {exc}", file=sys.stderr, flush=True)
+            # SY-4: 失败 → retry queue. 超 max_attempts 时 push 返 DeadLetter
+            if self.retry_queue is not None:
+                self.retry_queue.push(issue_key, f"spawn-issue-window failed: {exc}")
             seen_state.update_entry(repo, num, {
                 "last_action": "SPAWN_FAILED",
                 "approval_winner": winner,
@@ -143,6 +361,10 @@ class ImReplyRouter:
                 "spawn_error": str(exc),
             })
             return
+
+        # SY-4: dispatch 成功 → 清掉 retry queue 里之前失败的条目
+        if self.retry_queue is not None:
+            self.retry_queue.remove(issue_key)
 
         from dashboard_tmux import issue_window_name
         window_name = issue_window_name(repo, num)

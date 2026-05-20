@@ -81,12 +81,13 @@ class DashboardAggregator:
             self.unsubscribe(q)
 
     async def _collect(self) -> dict[str, Any]:
-        tmux_state, pending, seen_data, watcher_info, receiver_info = await asyncio.gather(
+        tmux_state, pending, seen_data, watcher_info, receiver_info, retry_items = await asyncio.gather(
             _collect_tmux_state(),
             asyncio.to_thread(_collect_pending, self._state_dir),
             asyncio.to_thread(_load_seen_safe, self._state_dir),
             _collect_process_info("gitea_watcher"),
             _collect_process_info("gitea_webhook_receiver", port=RECEIVER_DEFAULT_PORT),
+            asyncio.to_thread(_collect_retry_queue, self._state_dir),
         )
         courts = _derive_courts(tmux_state["windows"], pending, seen_data)
         return {
@@ -96,6 +97,7 @@ class DashboardAggregator:
             "seen_issues_count": len(seen_data),
             "watcher": watcher_info,
             "receiver": receiver_info,
+            "retry_queue": retry_items,
             "ts": int(time.time()),
         }
 
@@ -221,6 +223,29 @@ def _load_seen_safe(state_dir: Path) -> dict[str, Any]:
             return load_seen(state_dir)
     except OSError:
         return {}
+
+
+def _collect_retry_queue(state_dir: Path) -> list[dict[str, Any]]:
+    """SY-4 #17: 把 retry queue 暴露给 UI. 不存在 / 模块未导入返 []."""
+    try:
+        from retry_queue import RetryQueue
+    except ImportError:
+        return []
+    try:
+        q = RetryQueue(state_dir=state_dir)
+    except (ValueError, OSError):
+        return []
+    items = q.snapshot()
+    return [
+        {
+            "issue_key": it.issue_key,
+            "attempt": it.attempt,
+            "next_at": it.next_at,
+            "last_error": it.last_error,
+            "last_failed_at": it.last_failed_at,
+        }
+        for it in items
+    ]
 
 
 # ---------------------------------------------------------------------------
