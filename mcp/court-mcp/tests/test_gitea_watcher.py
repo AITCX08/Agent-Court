@@ -121,3 +121,51 @@ def test_atomic_write_round_trip(tmp_path):
     payload = {"a": 1}
     watcher._atomic_write_json(watcher.seen_path, payload)
     assert json.loads(watcher.seen_path.read_text()) == payload
+
+
+# ---------------------------------------------------------------------------
+# SY-1 #16: WORKFLOW.md allowed_labels filter
+# ---------------------------------------------------------------------------
+
+from workflow_loader import WorkflowConfig  # noqa: E402
+
+
+def test_label_filter_empty_allowed_lets_everything_through(tmp_path):
+    watcher = GiteaWatcher(
+        court_root=tmp_path, client=StubClient(),
+        workflow_config=WorkflowConfig(allowed_labels=()),
+    )
+    issue = {"number": 1, "labels": []}
+    assert watcher._issue_passes_label_filter(issue) is True
+    issue_with_label = {"number": 2, "labels": [{"name": "anything"}]}
+    assert watcher._issue_passes_label_filter(issue_with_label) is True
+
+
+def test_label_filter_non_empty_requires_match(tmp_path):
+    watcher = GiteaWatcher(
+        court_root=tmp_path, client=StubClient(),
+        workflow_config=WorkflowConfig(allowed_labels=("agent-ok", "auto")),
+    )
+    assert watcher._issue_passes_label_filter({"labels": [{"name": "agent-ok"}]}) is True
+    assert watcher._issue_passes_label_filter({"labels": [{"name": "wontfix"}]}) is False
+    assert watcher._issue_passes_label_filter({"labels": []}) is False
+
+
+def test_label_filter_missing_workflow_config_lets_through(tmp_path):
+    watcher = GiteaWatcher(
+        court_root=tmp_path, client=StubClient(),
+        workflow_config=None,
+    )
+    # 即使 _maybe_load_workflow_config 自动加载了配置, 传 None 应该走默认 (放行)
+    # 这个 case 实际会用自动加载的 WORKFLOW.md (agent-court 本仓库根有), allowed_labels=()
+    assert watcher._issue_passes_label_filter({"labels": []}) is True
+
+
+def test_label_filter_malformed_labels_field_does_not_crash(tmp_path):
+    watcher = GiteaWatcher(
+        court_root=tmp_path, client=StubClient(),
+        workflow_config=WorkflowConfig(allowed_labels=("agent-ok",)),
+    )
+    # labels 不是 list / 元素不是 dict 时 silently 视为无 label
+    assert watcher._issue_passes_label_filter({"labels": None}) is False
+    assert watcher._issue_passes_label_filter({"labels": ["agent-ok"]}) is False  # 元素是 str 不是 dict
