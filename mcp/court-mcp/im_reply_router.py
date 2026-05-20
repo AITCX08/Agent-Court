@@ -21,6 +21,9 @@ from pathlib import Path
 from typing import Any
 
 import seen_state
+from log import get_logger
+
+_log = get_logger("router")
 
 
 def _iso_now() -> str:
@@ -66,7 +69,7 @@ class ImReplyRouter:
             try:
                 self._scan_once()
             except Exception as exc:  # pragma: no cover - defensive: 线程不能死
-                print(f"[router] scan failed: {exc!r}", file=sys.stderr, flush=True)
+                _log.exception(event="scan_failed", error=repr(exc))
             time.sleep(self.poll_interval)
 
     def scan_once(self) -> int:
@@ -83,7 +86,7 @@ class ImReplyRouter:
             try:
                 self._handle_intake_result(result_path)
             except Exception as exc:  # pragma: no cover - defensive
-                print(f"[router] handle {result_path.name} failed: {exc!r}", file=sys.stderr, flush=True)
+                _log.exception(event="handle_result_failed", file=result_path.name, error=repr(exc))
             self._seen_results.add(result_path.name)
             count += 1
         return count
@@ -92,7 +95,7 @@ class ImReplyRouter:
         try:
             meta = json.loads(result_path.read_text())
         except json.JSONDecodeError as exc:
-            print(f"[router] {result_path.name} 不是合法 JSON: {exc}; 已跳过", file=sys.stderr, flush=True)
+            _log.warning(event="result_invalid_json", file=result_path.name, error=str(exc))
             self._archive(result_path, reason="invalid-json")
             return
 
@@ -103,7 +106,7 @@ class ImReplyRouter:
 
         ctx = self._load_intake_context(repo, num)
         if ctx is None:
-            print(f"[router] missing intake context for {repo}#{num}; 已跳过", file=sys.stderr, flush=True)
+            _log.warning(event="missing_intake_context", repo=repo, num=num)
             self._archive(result_path, reason="missing-context")
             return
 
@@ -112,7 +115,7 @@ class ImReplyRouter:
         elif verdict == "reject":
             self._dispatch_rejected(repo, num, meta.get("reason", ""), winner)
         else:
-            print(f"[router] unsupported verdict {verdict!r} for {repo}#{num}", file=sys.stderr, flush=True)
+            _log.warning(event="unsupported_verdict", verdict=verdict, repo=repo, num=num)
 
         self._archive(result_path, reason=verdict or "unknown")
 
@@ -135,7 +138,7 @@ class ImReplyRouter:
                 env=self._safe_env(),
             )
         except subprocess.CalledProcessError as exc:
-            print(f"[router] spawn-issue-window failed for {repo}#{num}: {exc}", file=sys.stderr, flush=True)
+            _log.error(event="spawn_window_failed", repo=repo, num=num, error=str(exc))
             seen_state.update_entry(repo, num, {
                 "last_action": "SPAWN_FAILED",
                 "approval_winner": winner,
@@ -161,7 +164,7 @@ class ImReplyRouter:
             client.comment_on_issue(repo, num, comment_body)
             client.transition_issue(repo, num, "closed")
         except Exception as exc:  # pragma: no cover - defensive
-            print(f"[router] reject api call failed for {repo}#{num}: {exc!r}", file=sys.stderr, flush=True)
+            _log.error(event="reject_api_failed", repo=repo, num=num, error=repr(exc))
         seen_state.update_entry(repo, num, {
             "last_action": "REJECTED_DASHBOARD",
             "approval_winner": winner,

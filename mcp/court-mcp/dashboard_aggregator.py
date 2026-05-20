@@ -22,11 +22,14 @@ from typing import Any, Callable
 
 from dashboard_tmux import SESSION_NAME as DASHBOARD_SESSION
 from dashboard_tmux import WATCHER_WINDOW
+from log import get_logger
 from seen_state import default_state_dir, load_seen, state_lock
 
 CACHE_TTL_SECONDS = 1.0
 RECEIVER_DEFAULT_PORT = int(os.environ.get("WEBHOOK_PORT", "8765"))
 DEBOUNCE_DEFAULT_MS = 200
+
+_log = get_logger("dashboard-aggregator")
 
 
 class DashboardAggregator:
@@ -416,7 +419,7 @@ class FsWatcher:
         try:
             result = self._on_change()
         except Exception as exc:
-            print(f"[dashboard-aggregator] on_change raised: {exc!r}", flush=True)
+            _log.exception(event="on_change_raised", error=repr(exc))
             return
         if asyncio.iscoroutine(result):
             loop = self._loop

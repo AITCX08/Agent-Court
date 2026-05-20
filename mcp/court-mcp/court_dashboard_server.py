@@ -28,15 +28,14 @@ from dashboard_aggregator import (
 )
 from dashboard_tmux import SESSION_NAME as DASHBOARD_SESSION
 from dual_channel_approval import submit_verdict as approval_submit_verdict
+from log import get_logger
 from seen_state import default_state_dir
 
 VERSION = "pr-15"
 SSE_KEEPALIVE_SECONDS = 30
 FRONTEND_DIST_DIRNAME = "frontend/dist"
 
-
-def _log(msg: str) -> None:
-    print(f"[court-dashboard] {msg}", file=sys.stderr, flush=True)
+_log = get_logger("dashboard-server")
 
 
 # ---------------------------------------------------------------------------
@@ -91,7 +90,7 @@ async def _on_startup(app: web.Application) -> None:
     try:
         fw.start()
     except Exception as exc:
-        _log(f"fs watcher disabled (start failed): {exc!r}")
+        _log.warning(event="fs_watcher_start_failed", error=repr(exc))
         return
     app["fs_watcher"] = fw
 
@@ -357,7 +356,7 @@ async def _run_app(host: str, port: int, app: web.Application) -> None:
     await runner.setup()
     site = web.TCPSite(runner, host=host, port=port)
     await site.start()
-    _log(f"listening on http://{host}:{port}")
+    _log.info(event="listening", host=host, port=port)
     stop_event = asyncio.Event()
     try:
         await stop_event.wait()
@@ -389,7 +388,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         token = _resolve_token(args.token)
     except SystemExit as exc:
-        _log(str(exc))
+        _log.error(event="token_resolve_failed", error=str(exc))
         return 2
 
     state_dir = Path(args.state_dir) if args.state_dir else None
@@ -406,10 +405,10 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     except OSError as exc:
         # PR-14 review C2 同款: 端口被占等 OSError 必须非零退出, 让 launchd 重启
-        _log(f"startup failed (OSError): {exc}")
+        _log.error(event="startup_oserror", error=str(exc))
         return 4
     except Exception as exc:
-        _log(f"unexpected startup error: {exc!r}")
+        _log.exception(event="startup_failed", error=repr(exc))
         return 4
     return 0
 

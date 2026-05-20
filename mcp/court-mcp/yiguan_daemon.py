@@ -51,6 +51,9 @@ from bangjiao import (
     verify_signature,
     write_inbound_to_bus,
 )
+from log import get_logger
+
+_log_inst = get_logger("yiguan")
 
 
 REQUIRED_FIELDS = ("from", "from_court", "to", "body", "ts", "id", "signature")
@@ -66,8 +69,13 @@ _OPTIONAL_STRING_FIELDS = ("in_reply_to",)
 _TS_FRESHNESS_WINDOW_SECONDS = 300
 
 
+# 旧 _log(project, line) 兼容 shim. line 落到 kv_text (因为 ``message`` 是
+# LogRecord 保留字段, ComponentLogger 会自动加 kv_ 前缀). 新代码可用
+# ``_log_inst.info(event="...", project=..., **kv)`` 走结构化 event 风格.
 def _log(project: str, line: str) -> None:
-    print(f"[{iso_now()}] [{project}] {line}", file=sys.stderr, flush=True)
+    # line 第一段 (冒号前) 拆做 event hint, 全文进 text kv
+    head = line.split(":", 1)[0].strip().replace(" ", "_").lower() or "msg"
+    _log_inst.info(event=head, project=project, text=line)
 
 
 def make_app(project: str) -> web.Application:
@@ -384,26 +392,22 @@ def main() -> int:
 
     fed = load_bangjiao(project)
     if not fed.enabled:
-        print(
-            f"[tongzheng] federation is disabled for project '{project}'.",
-            file=sys.stderr,
-        )
-        print(
-            f"[tongzheng] enable it in {project_court_yaml_path(project)} under the "
-            f"`bangjiao:` block (see projects/example/court.yaml for the schema).",
-            file=sys.stderr,
+        _log_inst.error(
+            event="federation_disabled",
+            project=project,
+            yaml_path=str(project_court_yaml_path(project)),
         )
         return 1
 
     try:
         identity = load_identity(project)
     except FileNotFoundError as e:
-        print(f"[tongzheng] {e}", file=sys.stderr)
+        _log_inst.error(event="identity_load_failed", project=project, error=str(e))
         return 1
 
     host, _, port_s = args.bind.partition(":")
     if not port_s:
-        print(f"[tongzheng] --bind must be host:port, got '{args.bind}'", file=sys.stderr)
+        _log_inst.error(event="bad_bind_format", bind=args.bind)
         return 2
     port = int(port_s)
 
