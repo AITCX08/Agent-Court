@@ -51,11 +51,21 @@ def _pending_dir(state_dir: Path | None = None) -> Path:
 
 
 def _verify_signature(secret: str, raw_body: bytes, header_sig: str) -> bool:
-    """Gitea 用 HMAC-SHA256(body, secret), 纯 hex 编码, 不带 'sha256=' 前缀 (跟 GitHub 不同)."""
+    """HMAC-SHA256(body, secret) 校验. 兼容两种格式:
+
+    - **Gitea**: 纯 hex (``X-Gitea-Signature: <hex>``)
+    - **GitHub**: ``X-Hub-Signature-256: sha256=<hex>``
+
+    都用 ``hmac.compare_digest`` 防 timing attack.
+    """
     if not header_sig:
         return False
     expected = hmac.new(secret.encode("utf-8"), raw_body, sha256).hexdigest()
-    return hmac.compare_digest(expected, header_sig.strip())
+    candidate = header_sig.strip()
+    # GitHub 前缀剥离
+    if candidate.lower().startswith("sha256="):
+        candidate = candidate[len("sha256="):]
+    return hmac.compare_digest(expected, candidate)
 
 
 def _atomic_write_payload(dest: Path, payload: dict[str, Any]) -> None:
@@ -140,17 +150,33 @@ def create_app(*, state_dir: Path | None = None, secret: str | None = None, allo
             _log.warning(event="read_body_failed", error=repr(exc))
             return web.Response(status=200, text="bad-body-acked")
 
-        sig = request.headers.get("X-Gitea-Signature", "")
+        # BOOT-1 #20: 兼容 Gitea (X-Gitea-Signature 裸 hex) + GitHub
+        # (X-Hub-Signature-256 sha256=hex). 取到非空那个再校签.
+        sig = (
+            request.headers.get("X-Gitea-Signature")
+            or request.headers.get("X-Hub-Signature-256")
+            or ""
+        )
         if not _verify_signature(secret, raw_body, sig):
-            # PR-14 review C1 fix: 按 plan D8 一律 ack 200 防 Gitea 重试风暴.
+            # PR-14 review C1 fix: 按 plan D8 一律 ack 200 防 Gitea/GitHub 重试风暴.
             # 安全性靠 secret 校验 + 内网部署, 不靠 401 status code.
+            delivery_hdr = (
+                request.headers.get("X-Gitea-Delivery")
+                or request.headers.get("X-GitHub-Delivery")
+                or "?"
+            )
             _log.warning(
                 event="invalid_signature_dropped",
-                delivery=request.headers.get("X-Gitea-Delivery", "?"),
+                delivery=delivery_hdr,
             )
             return web.Response(status=200, text="invalid-signature dropped")
 
-        event = request.headers.get("X-Gitea-Event", "")
+        # GitHub 用 X-GitHub-Event, Gitea 用 X-Gitea-Event; 取非空那个
+        event = (
+            request.headers.get("X-Gitea-Event")
+            or request.headers.get("X-GitHub-Event")
+            or ""
+        )
         if event not in ALLOWED_EVENTS:
             return web.Response(status=200, text=f"event={event} dropped")
 
@@ -169,7 +195,11 @@ def create_app(*, state_dir: Path | None = None, secret: str | None = None, allo
             if not (assignees & allowed_users):
                 return web.Response(status=200, text="not-assigned-to-me dropped")
 
-        delivery = (request.headers.get("X-Gitea-Delivery") or "").strip() or f"missing-{int(time.time())}"
+        delivery = (
+            request.headers.get("X-Gitea-Delivery")
+            or request.headers.get("X-GitHub-Delivery")
+            or ""
+        ).strip() or f"missing-{int(time.time())}"
         # 文件名安全: delivery 是 uuid 但保险起见过滤
         safe_delivery = "".join(c for c in delivery if c.isalnum() or c in "-_") or "anon"
         dest = pending / f"{int(time.time())}-{safe_delivery}.json"
