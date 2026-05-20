@@ -70,17 +70,19 @@ WINDOW_NAME="$(cd "$PY_DIR" && "$PYTHON_BIN" -c "from dashboard_tmux import issu
 
 # SY-2 #19: working_dir_strategy=worktree → 给本 issue 起独立 git worktree, claude cwd 设为它
 # inplace (默认) → cwd 用 ~/Desktop/K2Work/<repo_name>/ (老路径, prompt 里告诉 claude 自己 cd)
+#
+# SY-2 review R-2: source repo 不存在 / worktree 创建失败 → 降级到 inplace, 不 exit
+# 让用户在 issue 跑起来后补 clone 比直接放弃整个 dispatch 友好得多.
 COURT_CWD=""
 if [ "$WORKING_DIR_STRATEGY" = "worktree" ]; then
   REPO_NAME="${REPO##*/}"
   SOURCE_REPO="$HOME/Desktop/K2Work/$REPO_NAME"
   if [ ! -d "$SOURCE_REPO" ]; then
-    echo "[spawn-issue-window] worktree strategy requires source repo at $SOURCE_REPO" >&2
-    echo "[spawn-issue-window] git clone the repo first, or set working_dir_strategy=inplace in WORKFLOW.md" >&2
-    rm -f "$WORKFLOW_PROMPT_FILE"
-    exit 1
-  fi
-  COURT_CWD="$(cd "$PY_DIR" && "$PYTHON_BIN" -c "
+    echo "[spawn-issue-window] WARN: worktree mode but source repo missing at $SOURCE_REPO" >&2
+    echo "[spawn-issue-window] falling back to inplace; clone the repo or set working_dir_strategy=inplace to silence" >&2
+    # 不设 COURT_CWD, 走 inplace 路径
+  else
+    COURT_CWD="$(cd "$PY_DIR" && "$PYTHON_BIN" -c "
 from pathlib import Path
 import sys
 from workspace_manager import WorkspaceManager, WorkspaceError
@@ -89,14 +91,16 @@ try:
         Path('$SOURCE_REPO'), '$REPO#$NUM'
     )
 except WorkspaceError as e:
-    print(f'[spawn-issue-window] worktree creation failed: {e}', file=sys.stderr)
-    sys.exit(1)
+    print(f'[spawn-issue-window] WARN: worktree creation failed ({e}); falling back to inplace', file=sys.stderr)
+    sys.exit(2)
 print(wt.path)
 print(f'[spawn-issue-window] worktree at {wt.path} (branch={wt.branch})', file=sys.stderr)
 ")"
-  if [ -z "$COURT_CWD" ]; then
-    rm -f "$WORKFLOW_PROMPT_FILE"
-    exit 1
+    if [ -z "$COURT_CWD" ]; then
+      # SY-2 review R-2: worktree creation 失败 → 降级 inplace (python helper exit 2)
+      echo "[spawn-issue-window] worktree creation failed, continuing in inplace mode" >&2
+      COURT_CWD=""
+    fi
   fi
 fi
 
