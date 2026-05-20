@@ -34,4 +34,7 @@ py-modules = [
   "dual_channel_approval",
   "issue_resolver",
   "im_reply_router",
+  "seen_state",
+  "webhook_secret",
+  "gitea_webhook_receiver",
 ]

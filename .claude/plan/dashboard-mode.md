@@ -876,4 +876,12 @@ def test_intake_race_terminal_wins():
 
 ---
 
+## 后续 PR-14: webhook 模式
+
+PR-13 dashboard 模式仍走 30s 轮询. PR-14 在上游加 Gitea webhook 内网推送, 把延迟降到秒级, 兜底轮询降到 5min. dashboard 模式自动受益 (webhook 来的 issue 跟 polling 来的一样进 `_apply_decision_dashboard` 双通道审批链路).
+
+详见 `.claude/plan/webhook-mode.md` + `docs/webhook-mode.md`.
+
+---
+
 **END · PR-13 dashboard-mode.md**

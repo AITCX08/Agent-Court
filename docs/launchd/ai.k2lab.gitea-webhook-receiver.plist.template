@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+  <dict>
+    <key>Label</key>
+    <string>ai.k2lab.gitea-webhook-receiver</string>
+    <key>ProgramArguments</key>
+    <array>
+      <string>__REPO_ROOT__/bin/gitea-webhook-receiver</string>
+      <string>foreground</string>
+    </array>
+    <key>EnvironmentVariables</key>
+    <dict>
+      <key>COURT_ROOT</key>
+      <string>__COURT_ROOT__</string>
+      <key>WEBHOOK_PORT</key>
+      <string>__PORT__</string>
+    </dict>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>ThrottleInterval</key>
+    <integer>10</integer>
+    <key>StandardOutPath</key>
+    <string>__HOME__/Library/Logs/gitea-webhook-receiver.out.log</string>
+    <key>StandardErrorPath</key>
+    <string>__HOME__/Library/Logs/gitea-webhook-receiver.err.log</string>
+  </dict>
+</plist>
