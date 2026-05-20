@@ -161,3 +161,105 @@ def test_missing_context_archived(tmp_path, monkeypatch):
     assert n == 1
     archived = list((pending / ".processed").glob("*missing-context*"))
     assert len(archived) == 1
+
+
+# ---------------------------------------------------------------------------
+# SY-4 #17: bounded concurrency + retry queue
+# ---------------------------------------------------------------------------
+
+from retry_queue import RetryQueue  # noqa: E402
+from workflow_loader import WorkflowConfig  # noqa: E402
+
+
+def _result_approve(repo: str, num: int) -> dict:
+    return {"repo": repo, "number": num, "stage": "INTAKE",
+            "verdict": "approve", "winner": "terminal", "reason": "", "edit_instruction": ""}
+
+
+def test_at_capacity_defers_and_pushes_retry_queue(tmp_path, monkeypatch):
+    pending, _, court_root = _setup_fixtures(tmp_path)
+    stub = _make_stub_spawn(tmp_path)
+    monkeypatch.setenv("COURT_ROOT", str(court_root))
+    (pending / f"{SLUG}-{NUM}-intake.result").write_text(json.dumps(_result_approve(REPO, NUM)))
+    rq = RetryQueue(state_dir=court_root / "gitea-watcher", max_attempts=3, base_backoff_seconds=60)
+    router = ImReplyRouter(
+        court_root, gitea_client=_StubGitea(), spawn_window_bin=stub,
+        workflow_config=WorkflowConfig(max_concurrent_runs=2),
+        retry_queue=rq,
+        active_court_counter=lambda: 2,  # 已满
+    )
+    n = router.scan_once()
+    assert n == 1
+    # seen 标记 DEFERRED_CAPACITY
+    seen = json.loads((court_root / "gitea-watcher" / "seen-issues.json").read_text())
+    assert seen[f"{REPO}#{NUM}"]["last_action"] == "DEFERRED_CAPACITY"
+    # retry queue 有这条
+    items = rq.snapshot()
+    assert len(items) == 1
+    assert items[0].issue_key == f"{REPO}#{NUM}"
+    assert "concurrency cap" in items[0].last_error
+
+
+def test_under_capacity_dispatches_and_clears_retry(tmp_path, monkeypatch):
+    pending, _, court_root = _setup_fixtures(tmp_path)
+    stub = _make_stub_spawn(tmp_path)
+    monkeypatch.setenv("COURT_ROOT", str(court_root))
+    (pending / f"{SLUG}-{NUM}-intake.result").write_text(json.dumps(_result_approve(REPO, NUM)))
+    rq = RetryQueue(state_dir=court_root / "gitea-watcher", max_attempts=3, base_backoff_seconds=60)
+    # 预置一条 (模拟之前 deferred 过的)
+    rq.push(f"{REPO}#{NUM}", "previous defer")
+    assert len(rq) == 1
+    router = ImReplyRouter(
+        court_root, gitea_client=_StubGitea(), spawn_window_bin=stub,
+        workflow_config=WorkflowConfig(max_concurrent_runs=5),
+        retry_queue=rq,
+        active_court_counter=lambda: 1,  # 未满
+    )
+    n = router.scan_once()
+    assert n == 1
+    seen = json.loads((court_root / "gitea-watcher" / "seen-issues.json").read_text())
+    assert seen[f"{REPO}#{NUM}"]["last_action"] == "DISPATCHED_DASHBOARD"
+    # dispatch 成功 → retry queue 清空
+    assert len(rq) == 0
+
+
+def test_spawn_failure_pushes_retry_queue(tmp_path, monkeypatch):
+    pending, _, court_root = _setup_fixtures(tmp_path)
+    bad_stub = tmp_path / "always-fail.sh"
+    bad_stub.write_text("#!/usr/bin/env bash\nexit 1\n")
+    bad_stub.chmod(0o755)
+    monkeypatch.setenv("COURT_ROOT", str(court_root))
+    (pending / f"{SLUG}-{NUM}-intake.result").write_text(json.dumps(_result_approve(REPO, NUM)))
+    rq = RetryQueue(state_dir=court_root / "gitea-watcher", max_attempts=3, base_backoff_seconds=60)
+    router = ImReplyRouter(
+        court_root, gitea_client=_StubGitea(), spawn_window_bin=bad_stub,
+        workflow_config=WorkflowConfig(max_concurrent_runs=5),
+        retry_queue=rq,
+        active_court_counter=lambda: 0,
+    )
+    n = router.scan_once()
+    assert n == 1
+    seen = json.loads((court_root / "gitea-watcher" / "seen-issues.json").read_text())
+    assert seen[f"{REPO}#{NUM}"]["last_action"] == "SPAWN_FAILED"
+    items = rq.snapshot()
+    assert len(items) == 1
+    assert "spawn-issue-window failed" in items[0].last_error
+
+
+def test_no_workflow_config_no_capacity_check(tmp_path, monkeypatch):
+    """workflow_config=None 时不限流, 保持向后兼容 (老行为)."""
+    pending, _, court_root = _setup_fixtures(tmp_path)
+    stub = _make_stub_spawn(tmp_path)
+    monkeypatch.setenv("COURT_ROOT", str(court_root))
+    (pending / f"{SLUG}-{NUM}-intake.result").write_text(json.dumps(_result_approve(REPO, NUM)))
+    router = ImReplyRouter(
+        court_root, gitea_client=_StubGitea(), spawn_window_bin=stub,
+        workflow_config=None,  # 显式禁用 auto-load
+        retry_queue=None,
+        active_court_counter=lambda: 9999,  # 假装已经满了 9999 个 court
+    )
+    n = router.scan_once()
+    assert n == 1
+    seen = json.loads((court_root / "gitea-watcher" / "seen-issues.json").read_text())
+    # 没限流 → 正常 dispatch
+    assert seen[f"{REPO}#{NUM}"]["last_action"] == "DISPATCHED_DASHBOARD"
