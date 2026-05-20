@@ -108,12 +108,22 @@ async def _on_cleanup(app: web.Application) -> None:
 # ---------------------------------------------------------------------------
 
 _PUBLIC_PATHS = {"/api/healthz"}
+_PUBLIC_PATH_PREFIXES = ("/assets/",)
+
+
+def _is_public(path: str) -> bool:
+    """``/`` index.html 仍需校 token (走 _is_browser_index 提示页);
+    ``/assets/*`` 是 build 产物 (公开 npm 仓库就能复刻), 跳过 token 校验,
+    否则 ``<script src='./assets/...'>`` 无 query 跟随时被 401, JS 加载不到, 页面空白."""
+    if path in _PUBLIC_PATHS:
+        return True
+    return any(path.startswith(p) for p in _PUBLIC_PATH_PREFIXES)
 
 
 def _token_middleware(expected: str):
     @web.middleware
     async def middleware(request: web.Request, handler: Callable[..., Awaitable[web.StreamResponse]]) -> web.StreamResponse:
-        if request.path in _PUBLIC_PATHS:
+        if _is_public(request.path):
             return await handler(request)
         provided = _extract_token(request)
         if provided is None or not secrets.compare_digest(provided, expected):
