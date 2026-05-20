@@ -1,0 +1,21 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html, body, #root {
+    height: 100%;
+  }
+  body {
+    font-family: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Helvetica, 'PingFang SC', sans-serif;
+  }
+}
+
+@layer components {
+  .glass {
+    @apply bg-white/[0.04] backdrop-blur-xl border border-white/10;
+  }
+  .glass-strong {
+    @apply bg-white/[0.06] backdrop-blur-xl border border-white/15;
+  }
+}
