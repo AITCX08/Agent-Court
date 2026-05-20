@@ -31,6 +31,30 @@ def _iso_now() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
+def _iso_older_than(ts_iso: str, ref_iso: str, seconds: float) -> bool:
+    """ts_iso 比 ref_iso 早 ``seconds`` 秒以上? 解析失败返 False (保守)."""
+    from datetime import datetime
+    if not ts_iso or not ref_iso:
+        return False
+    try:
+        ts = datetime.fromisoformat(ts_iso.replace("Z", "+00:00"))
+        ref = datetime.fromisoformat(ref_iso.replace("Z", "+00:00"))
+    except ValueError:
+        return False
+    return (ref - ts).total_seconds() > seconds
+
+
+def _split_issue_key(key: str) -> tuple[str, int]:
+    """``foo/bar#12`` → (``foo/bar``, 12). 解析失败返 (key, 0)."""
+    repo, sep, num_str = key.partition("#")
+    if not sep:
+        return key, 0
+    try:
+        return repo, int(num_str)
+    except ValueError:
+        return repo, 0
+
+
 class ImReplyRouter:
     def __init__(
         self,
@@ -158,7 +182,112 @@ class ImReplyRouter:
                 print(f"[router] handle {result_path.name} failed: {exc!r}", file=sys.stderr, flush=True)
             self._seen_results.add(result_path.name)
             count += 1
+        # SY-4 review R-1: 也消费 retry queue 到点条目; 没人 tick → defer 的 issue 永远卡
+        count += self._retry_due_items()
+        # SY-4 review Mi-2: 也扫超时的 court window
+        count += self._enforce_run_timeout()
         return count
+
+    def _retry_due_items(self) -> int:
+        """SY-4 review R-1: 把 retry queue 里到点的 issue 拿回来重新 dispatch.
+
+        从 intake_context 找回 issue+decision+comments, 从 seen-issues 取历史 winner,
+        重新走 _dispatch_approved (含 capacity check + 再失败再 push).
+        """
+        if self.retry_queue is None:
+            return 0
+        try:
+            due_keys = self.retry_queue.pop_due()
+        except Exception as exc:  # pragma: no cover - defensive
+            print(f"[router] retry pop_due failed: {exc!r}", file=sys.stderr, flush=True)
+            return 0
+        n = 0
+        for key in due_keys:
+            try:
+                repo, sep, num_str = key.partition("#")
+                if not sep:
+                    continue
+                num = int(num_str)
+            except ValueError:
+                continue
+            ctx = self._load_intake_context(repo, num)
+            if ctx is None:
+                # context 丢了, 没法恢复; 不重新 push (会无限循环)
+                print(f"[router] retry skip {key}: missing intake context", file=sys.stderr, flush=True)
+                continue
+            try:
+                seen = seen_state.load_seen(self.court_root / "gitea-watcher")
+            except OSError:
+                seen = {}
+            entry = seen.get(key, {}) if isinstance(seen, dict) else {}
+            winner = entry.get("approval_winner", "retry")
+            try:
+                self._dispatch_approved(repo, num, ctx, winner)
+                n += 1
+            except Exception as exc:  # pragma: no cover - defensive
+                print(f"[router] retry dispatch {key} failed: {exc!r}", file=sys.stderr, flush=True)
+        return n
+
+    def _enforce_run_timeout(self) -> int:
+        """SY-4 review Mi-2: 跑超时的 court window 强制 kill + 进 retry queue.
+
+        timeout 来源 WORKFLOW.md run_timeout_seconds (cfg 缺失则不 enforce).
+        判定: seen-issues entry 有 dispatched_at 且距今 > timeout → kill window.
+        """
+        cfg = self.workflow_config
+        if cfg is None:
+            return 0
+        timeout_s = getattr(cfg, "run_timeout_seconds", 0)
+        if not timeout_s or timeout_s <= 0:
+            return 0
+        try:
+            seen = seen_state.load_seen(self.court_root / "gitea-watcher")
+        except OSError:
+            return 0
+        if not isinstance(seen, dict):
+            return 0
+        now_iso = _iso_now()
+        n = 0
+        for key, entry in list(seen.items()):
+            if not isinstance(entry, dict):
+                continue
+            if entry.get("last_action") != "DISPATCHED_DASHBOARD":
+                continue
+            dispatched_at = entry.get("dispatched_at", "")
+            if not _iso_older_than(dispatched_at, now_iso, timeout_s):
+                continue
+            window_name = entry.get("tmux_window") or ""
+            if not window_name:
+                continue
+            try:
+                self._kill_tmux_window(window_name)
+            except Exception as exc:  # pragma: no cover - defensive
+                print(f"[router] timeout kill {key} ({window_name}) failed: {exc!r}", file=sys.stderr, flush=True)
+                continue
+            if self.retry_queue is not None:
+                self.retry_queue.push(key, f"timeout after {timeout_s}s")
+            seen_state.update_entry(
+                _split_issue_key(key)[0], _split_issue_key(key)[1],
+                {
+                    "last_action": "TIMEOUT_KILLED",
+                    "timeout_killed_at": now_iso,
+                },
+            )
+            print(f"[router] timeout kill {key} ({window_name}, after {timeout_s}s)", file=sys.stderr, flush=True)
+            n += 1
+        return n
+
+    def _kill_tmux_window(self, window_name: str) -> None:
+        """安全 kill: 校验 window 名只含 path-safe 字符."""
+        if not window_name or "/" in window_name or any(c in window_name for c in (" ", ";", "&", "|", "$", "`")):
+            raise ValueError(f"unsafe window name: {window_name!r}")
+        from dashboard_tmux import SESSION_NAME
+        subprocess.run(
+            ["tmux", "kill-window", "-t", f"{SESSION_NAME}:{window_name}"],
+            capture_output=True,
+            timeout=3,
+            check=False,
+        )
 
     def _handle_intake_result(self, result_path: Path) -> None:
         try:

@@ -263,3 +263,163 @@ def test_no_workflow_config_no_capacity_check(tmp_path, monkeypatch):
     seen = json.loads((court_root / "gitea-watcher" / "seen-issues.json").read_text())
     # 没限流 → 正常 dispatch
     assert seen[f"{REPO}#{NUM}"]["last_action"] == "DISPATCHED_DASHBOARD"
+
+
+# ---------------------------------------------------------------------------
+# SY-4 review R-1: retry queue 自己 tick (没有外部 daemon 兜底)
+# ---------------------------------------------------------------------------
+
+def test_retry_queue_pop_due_dispatches_when_under_capacity(tmp_path, monkeypatch):
+    """到点 retry 在 scan_once 末尾被自动消费, dispatch 成功后清掉 queue."""
+    pending, ctx_dir, court_root = _setup_fixtures(tmp_path)
+    stub = _make_stub_spawn(tmp_path)
+    monkeypatch.setenv("COURT_ROOT", str(court_root))
+    # 没有新 result 文件; 但 retry queue 里有一条到点的
+    rq = RetryQueue(state_dir=court_root / "gitea-watcher", max_attempts=3, base_backoff_seconds=1)
+    rq.push(f"{REPO}#{NUM}", "previous spawn failed")
+    # 预先把 seen-issues 写好让 _dispatch_approved 能写 winner
+    (court_root / "gitea-watcher").mkdir(parents=True, exist_ok=True)
+    (court_root / "gitea-watcher" / "seen-issues.json").write_text(json.dumps({
+        f"{REPO}#{NUM}": {"approval_winner": "feishu", "stage": "INTAKE"},
+    }))
+    # 等过 backoff (1s base * 2^0 = 1s)
+    import time
+    time.sleep(1.1)
+    router = ImReplyRouter(
+        court_root, gitea_client=_StubGitea(), spawn_window_bin=stub,
+        workflow_config=WorkflowConfig(max_concurrent_runs=5),
+        retry_queue=rq,
+        active_court_counter=lambda: 0,
+    )
+    n = router.scan_once()
+    # n 含 retry dispatch 数
+    assert n >= 1
+    seen = json.loads((court_root / "gitea-watcher" / "seen-issues.json").read_text())
+    assert seen[f"{REPO}#{NUM}"]["last_action"] == "DISPATCHED_DASHBOARD"
+    assert seen[f"{REPO}#{NUM}"]["approval_winner"] == "feishu"  # 保留历史 winner
+    # retry queue 已清
+    assert len(rq) == 0
+
+
+def test_retry_pop_due_skip_when_context_missing(tmp_path, monkeypatch):
+    """context dir 没了 → retry skip, 不再 re-push (避免无限循环)."""
+    pending, ctx_dir, court_root = _setup_fixtures(tmp_path)
+    # 删 context 模拟丢失
+    for f in ctx_dir.iterdir():
+        f.unlink()
+    stub = _make_stub_spawn(tmp_path)
+    monkeypatch.setenv("COURT_ROOT", str(court_root))
+    rq = RetryQueue(state_dir=court_root / "gitea-watcher", max_attempts=3, base_backoff_seconds=0.001)
+    rq.push("ghost/repo#99", "old")
+    import time
+    time.sleep(0.01)
+    router = ImReplyRouter(
+        court_root, gitea_client=_StubGitea(), spawn_window_bin=stub,
+        workflow_config=WorkflowConfig(),
+        retry_queue=rq,
+        active_court_counter=lambda: 0,
+    )
+    router.scan_once()
+    # context 丢 → skip, queue 已被 pop_due 清掉 (没再 push)
+    assert len(rq) == 0
+
+
+# ---------------------------------------------------------------------------
+# SY-4 review Mi-2: run_timeout_seconds 守护
+# ---------------------------------------------------------------------------
+
+def test_timeout_kills_old_dispatched_window_and_pushes_retry(tmp_path, monkeypatch):
+    pending, _, court_root = _setup_fixtures(tmp_path)
+    stub = _make_stub_spawn(tmp_path)
+    monkeypatch.setenv("COURT_ROOT", str(court_root))
+    # 模拟一个 30 min 前 dispatched 的 court (跑超了)
+    (court_root / "gitea-watcher").mkdir(parents=True, exist_ok=True)
+    (court_root / "gitea-watcher" / "seen-issues.json").write_text(json.dumps({
+        f"{REPO}#{NUM}": {
+            "last_action": "DISPATCHED_DASHBOARD",
+            "dispatched_at": "2020-01-01T00:00:00Z",  # 远古
+            "tmux_window": "k2lab-test-7",
+        },
+    }))
+    rq = RetryQueue(state_dir=court_root / "gitea-watcher", max_attempts=3, base_backoff_seconds=60)
+    kill_calls: list[str] = []
+    router = ImReplyRouter(
+        court_root, gitea_client=_StubGitea(), spawn_window_bin=stub,
+        workflow_config=WorkflowConfig(run_timeout_seconds=1800),
+        retry_queue=rq,
+        active_court_counter=lambda: 1,
+    )
+    # mock 出 tmux kill 不真打
+    def fake_kill(window_name):
+        kill_calls.append(window_name)
+    router._kill_tmux_window = fake_kill
+    n = router.scan_once()
+    assert kill_calls == ["k2lab-test-7"]
+    seen = json.loads((court_root / "gitea-watcher" / "seen-issues.json").read_text())
+    assert seen[f"{REPO}#{NUM}"]["last_action"] == "TIMEOUT_KILLED"
+    assert seen[f"{REPO}#{NUM}"]["timeout_killed_at"]
+    # 进 retry queue
+    items = rq.snapshot()
+    assert len(items) == 1
+    assert "timeout after 1800s" in items[0].last_error
+
+
+def test_timeout_skips_recent_dispatched_window(tmp_path, monkeypatch):
+    """刚 dispatch 不久 (< timeout) 不该被 kill."""
+    pending, _, court_root = _setup_fixtures(tmp_path)
+    stub = _make_stub_spawn(tmp_path)
+    monkeypatch.setenv("COURT_ROOT", str(court_root))
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    (court_root / "gitea-watcher").mkdir(parents=True, exist_ok=True)
+    (court_root / "gitea-watcher" / "seen-issues.json").write_text(json.dumps({
+        f"{REPO}#{NUM}": {
+            "last_action": "DISPATCHED_DASHBOARD",
+            "dispatched_at": now,  # 刚刚
+            "tmux_window": "k2lab-test-7",
+        },
+    }))
+    rq = RetryQueue(state_dir=court_root / "gitea-watcher", max_attempts=3, base_backoff_seconds=60)
+    kill_calls: list[str] = []
+    router = ImReplyRouter(
+        court_root, gitea_client=_StubGitea(), spawn_window_bin=stub,
+        workflow_config=WorkflowConfig(run_timeout_seconds=1800),
+        retry_queue=rq,
+        active_court_counter=lambda: 1,
+    )
+    router._kill_tmux_window = lambda w: kill_calls.append(w)
+    router.scan_once()
+    assert kill_calls == []  # 没杀
+    assert len(rq) == 0
+
+
+def test_timeout_disabled_when_workflow_config_missing(tmp_path, monkeypatch):
+    pending, _, court_root = _setup_fixtures(tmp_path)
+    stub = _make_stub_spawn(tmp_path)
+    monkeypatch.setenv("COURT_ROOT", str(court_root))
+    (court_root / "gitea-watcher").mkdir(parents=True, exist_ok=True)
+    (court_root / "gitea-watcher" / "seen-issues.json").write_text(json.dumps({
+        f"{REPO}#{NUM}": {
+            "last_action": "DISPATCHED_DASHBOARD",
+            "dispatched_at": "2020-01-01T00:00:00Z",  # 远古
+            "tmux_window": "k2lab-test-7",
+        },
+    }))
+    kill_calls: list[str] = []
+    router = ImReplyRouter(
+        court_root, gitea_client=_StubGitea(), spawn_window_bin=stub,
+        workflow_config=None,  # 显式禁用
+        retry_queue=None,
+        active_court_counter=lambda: 1,
+    )
+    router._kill_tmux_window = lambda w: kill_calls.append(w)
+    router.scan_once()
+    assert kill_calls == []  # 没配置 → 不 enforce
+
+
+def test_iso_older_than_helper():
+    from im_reply_router import _iso_older_than
+    assert _iso_older_than("2020-01-01T00:00:00Z", "2026-01-01T00:00:00Z", 60) is True
+    assert _iso_older_than("2026-01-01T00:00:00Z", "2026-01-01T00:00:30Z", 60) is False
+    assert _iso_older_than("", "2026-01-01T00:00:00Z", 60) is False
+    assert _iso_older_than("garbage", "2026-01-01T00:00:00Z", 60) is False
