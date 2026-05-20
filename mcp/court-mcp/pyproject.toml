@@ -40,4 +40,5 @@ py-modules = [
   "gitea_webhook_receiver",
   "dashboard_aggregator",
   "court_dashboard_server",
+  "workflow_loader",
 ]

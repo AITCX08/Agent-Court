@@ -28,14 +28,29 @@ PYTHON_BIN="$PY_DIR/.venv/bin/python3"
 if [ ! -x "$PYTHON_BIN" ]; then
   PYTHON_BIN="python3"
 fi
-SKILL_FILE="$REPO_ROOT/.claude/skills/issue-resolver/SKILL.md"
 
-if [ ! -f "$SKILL_FILE" ]; then
-  echo "[spawn-issue-window] missing skill file: $SKILL_FILE" >&2
+# SY-1 #16: 优先读 in-repo WORKFLOW.md (含 frontmatter), fallback 老 SKILL.md
+# 用 workflow_loader 拿到 body (去 frontmatter), 喂给 Claude --append-system-prompt
+WORKFLOW_PROMPT_FILE="$(mktemp "${TMPDIR:-/tmp}/agent-court-workflow-XXXXXX.md")"
+if ! ( cd "$PY_DIR" && "$PYTHON_BIN" -c "
+from pathlib import Path
+import sys
+from workflow_loader import load_workflow, WorkflowNotFoundError
+try:
+    wf = load_workflow(Path('$REPO_ROOT'))
+except WorkflowNotFoundError as e:
+    print(f'[spawn-issue-window] {e}', file=sys.stderr)
+    sys.exit(1)
+Path('$WORKFLOW_PROMPT_FILE').write_text(wf.prompt_template, encoding='utf-8')
+print(f'[spawn-issue-window] workflow loaded from {wf.source_path}', file=sys.stderr)
+" ); then
+  rm -f "$WORKFLOW_PROMPT_FILE"
   exit 1
 fi
+
 if [ ! -f "$INTRO_FILE" ]; then
   echo "[spawn-issue-window] missing intro file: $INTRO_FILE" >&2
+  rm -f "$WORKFLOW_PROMPT_FILE"
   exit 1
 fi
 
@@ -44,8 +59,9 @@ WINDOW_NAME="$(cd "$PY_DIR" && "$PYTHON_BIN" -c "from dashboard_tmux import issu
 
 # 准备 wrapper 工作目录 (独立, 不污染 /tmp 全局)
 WRAPPER_DIR="$(mktemp -d "${TMPDIR:-/tmp}/agent-court-issue-XXXXXX")"
-cp "$SKILL_FILE" "$WRAPPER_DIR/skill.md"
+cp "$WORKFLOW_PROMPT_FILE" "$WRAPPER_DIR/skill.md"
 cp "$INTRO_FILE" "$WRAPPER_DIR/intro.txt"
+rm -f "$WORKFLOW_PROMPT_FILE"
 WRAPPER="$WRAPPER_DIR/run.sh"
 
 cat > "$WRAPPER" <<'WRAPPER_EOF'

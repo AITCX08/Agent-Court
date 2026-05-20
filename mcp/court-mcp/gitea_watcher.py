@@ -46,6 +46,7 @@ class GiteaWatcher:
         court_root: Path | None = None,
         client: GiteaClient | None = None,
         mode: str = "court",
+        workflow_config: "Any | None" = None,
     ) -> None:
         if mode not in {"court", "dashboard"}:
             raise ValueError(f"unsupported mode: {mode!r}")
@@ -61,6 +62,35 @@ class GiteaWatcher:
         self.bin_dir = Path(__file__).resolve().parents[2] / "bin"
         self._lock_path = self.state_dir / ".state.lock"
         self.mode = mode
+        # SY-1 #16: WORKFLOW.md 配置 (allowed_labels / max_concurrent_runs / ...).
+        # caller 没传就启动期 load 一次; load 失败 (无 WORKFLOW.md / 无 fallback)
+        # 退化到 None 走老逻辑 (不过滤 label, 用 env MAX_CONCURRENT_COURTS)
+        self.workflow_config = workflow_config if workflow_config is not None else self._maybe_load_workflow_config()
+
+    @staticmethod
+    def _maybe_load_workflow_config() -> "Any | None":
+        try:
+            from workflow_loader import load_workflow
+        except ImportError:
+            return None
+        repo_root = Path(__file__).resolve().parents[2]
+        try:
+            return load_workflow(repo_root).config
+        except Exception:
+            # 不阻塞 daemon 启动; allowed_labels 过滤功能 silently 关闭
+            return None
+
+    def _issue_passes_label_filter(self, issue: dict[str, Any]) -> bool:
+        """allowed_labels 空 = 不过滤 (全通过). 非空 = issue 必须命中其一."""
+        cfg = self.workflow_config
+        if cfg is None or not getattr(cfg, "allowed_labels", ()):
+            return True
+        issue_labels = {
+            (label.get("name") or "").strip()
+            for label in (issue.get("labels") or [])
+            if isinstance(label, dict)
+        }
+        return any(lbl in issue_labels for lbl in cfg.allowed_labels)
 
     def loop(self) -> None:
         router = None
@@ -85,6 +115,9 @@ class GiteaWatcher:
             # 再走 polling. webhook 事件强制视为 new (不走 bootstrap 跳过).
             webhook_items, webhook_delivery_map = self._consume_pending_webhook()
             issues = self.client.list_assigned_issues(state="open")
+            # SY-1 #16: WORKFLOW.md allowed_labels 过滤 (空 = 不过滤)
+            issues = [i for i in issues if self._issue_passes_label_filter(i)]
+            webhook_items = [i for i in webhook_items if self._issue_passes_label_filter(i)]
             queued = self._merge_retry_candidates(issues, seen)
             if not seen and not webhook_items:
                 bootstrap = {
