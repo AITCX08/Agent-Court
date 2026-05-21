@@ -54,7 +54,12 @@
       "open": "open",
       "wip": "draft",
       "review": "review",
-      "spawn_agent": "Spawn agent"
+      "spawn_agent": "Spawn Agent",
+      "linked_to_team": "Linked to {{team}}",
+      "spawn_pending": "Spawning...",
+      "spawn_error": "Spawn failed: {{detail}}",
+      "spawn_success": "Spawned as {{team}}",
+      "spawn_already": "Already spawned, jumping to agent"
     },
     "issues_section": "Issues",
     "no_pr": "No PRs",
@@ -79,7 +84,8 @@
       "label_edit": "Edit label",
       "label_save": "Save",
       "label_cancel": "Cancel",
-      "label_saved": "Label saved"
+      "label_saved": "Label saved",
+      "linked_target": "Working on {{repo}}#{{number}}"
     },
     "empty": "No agents running. Open claude in a ghostty tab and it appears within seconds.",
     "fetch_error": "Failed to load agents: {{detail}}"
