@@ -226,3 +226,28 @@ def test_lstart_parse_failure_returns_empty(monkeypatch, tmp_path):
     _patch_tmux(monkeypatch, [])
     snap = _agg(tmp_path).snapshot()
     assert snap["teams"][0]["started_at"] == ""
+
+
+def test_snapshot_joins_team_links(monkeypatch, tmp_path):
+    """tmux team 若在 team_links 里有记录, snapshot 给附 linked 字段."""
+    import team_links as tl
+    links = tl.TeamLinks(court_root=tmp_path)
+    links.set_link("agent-team-xyz789", "K2Lab/foo", 441, "pr",
+                   "https://git.k2lab.ai/K2Lab/foo/pulls/441")
+    _patch_ps(monkeypatch, [])
+    _patch_tmux(monkeypatch, [("agent-team-xyz789", 1, 1779356980)],
+                panes={"agent-team-xyz789": [{"index": 0, "pid": 1234, "command": "claude", "started_at": ""}]})
+    agg = at.AgentTeamAggregator(court_root=tmp_path, team_links=links)
+    snap = agg.snapshot()
+    assert snap["teams"][0]["linked"]["repo"] == "K2Lab/foo"
+    assert snap["teams"][0]["linked"]["number"] == 441
+
+
+def test_snapshot_unlinked_team_linked_is_none(monkeypatch, tmp_path):
+    import team_links as tl
+    links = tl.TeamLinks(court_root=tmp_path)
+    _patch_ps(monkeypatch, [("ttys025", 200, "00:30", "Claude", "Thu May 21 10:19:37 2026")])
+    _patch_tmux(monkeypatch, [])
+    agg = at.AgentTeamAggregator(court_root=tmp_path, team_links=links)
+    snap = agg.snapshot()
+    assert snap["teams"][0]["linked"] is None

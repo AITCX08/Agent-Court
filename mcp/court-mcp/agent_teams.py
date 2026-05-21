@@ -52,6 +52,7 @@ class AgentTeam:
     windows: int = 0
     panes: list[dict[str, Any]] = field(default_factory=list)
     mcp_subprocs: list[dict[str, Any]] = field(default_factory=list)
+    linked: dict[str, Any] | None = None  # {repo, number, kind, url}
     can_stream: bool = False
     can_stop: bool = False
 
@@ -62,8 +63,13 @@ class AgentTeam:
 class AgentTeamAggregator:
     """每次 snapshot 重扫全机 ps + tmux. 不缓存 (PR-17b 加 1s TTL)."""
 
-    def __init__(self, court_root: Path | None = None) -> None:
+    def __init__(self, court_root: Path | None = None,
+                 team_links: "TeamLinks | None" = None) -> None:
         self.court_root = court_root or (Path.home() / ".agent-court")
+        if team_links is None:
+            from team_links import TeamLinks
+            team_links = TeamLinks(court_root=self.court_root)
+        self.team_links = team_links
 
     # ------------------------------------------------------------------
     # 主入口
@@ -73,6 +79,15 @@ class AgentTeamAggregator:
         labels = self._load_labels()
         ghostty_teams = self._collect_ghostty(labels)
         tmux_teams = self._collect_tmux(labels)
+        # PR-17b: 给每 team 附 linked (从 team_links 反查)
+        # team_links 用原始 session 名 (无 "tmux:" 前缀) 作 key
+        from dataclasses import replace
+        for team_list in (ghostty_teams, tmux_teams):
+            for i, team in enumerate(team_list):
+                lookup_key = team.session if team.kind == "tmux" else team.id
+                linked = self.team_links.lookup_by_team(lookup_key)
+                if linked:
+                    team_list[i] = replace(team, linked=linked)
         # ghostty 先排 (按 started_at desc), 再 tmux
         ghostty_teams.sort(key=lambda t: t.started_at, reverse=True)
         tmux_teams.sort(key=lambda t: t.started_at, reverse=True)
