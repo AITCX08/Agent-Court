@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+# agent-court — court-reconcile: SY-3 (#18) MVP v1 旁挂 CLI. 跑一次
+# orchestrator.snapshot() + reconcile, 把不一致清单打到 stdout.
+#
+# Usage:
+#   court-reconcile               # 人类可读 (metrics + inconsistency list)
+#   court-reconcile --json        # 完整 snapshot.to_dict() json
+#   court-reconcile --quiet       # 只在有 inconsistency 时打
+#
+# Exit code: 0 = clean, 1 = warn-only, 2 = error
+#
+# 详情见 mcp/court-mcp/court_reconcile_cli.py 的 docstring.
+set -e
+
+BIN="$(cd "$(dirname "$0")" && pwd)"
+MCP_DIR="$(cd "$BIN/.." && pwd)/mcp/court-mcp"
+
+VENV_PY="${COURT_VENV_PY:-$MCP_DIR/.venv/bin/python}"
+if [ ! -x "$VENV_PY" ]; then
+  echo "[court-reconcile] missing python venv at $VENV_PY" >&2
+  echo "[court-reconcile] run: cd $MCP_DIR && uv venv .venv && uv pip install --python .venv/bin/python -e ." >&2
+  exit 1
+fi
+
+exec "$VENV_PY" "$MCP_DIR/court_reconcile_cli.py" "$@"

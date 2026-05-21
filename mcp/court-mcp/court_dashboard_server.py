@@ -29,6 +29,7 @@ from dashboard_aggregator import (
 from dashboard_tmux import SESSION_NAME as DASHBOARD_SESSION
 from dual_channel_approval import submit_verdict as approval_submit_verdict
 from log import get_logger
+from orchestrator import Orchestrator
 from seen_state import default_state_dir
 
 VERSION = "pr-15"
@@ -54,16 +55,19 @@ def create_app(
         raise ValueError("token must be non-empty")
 
     aggregator = DashboardAggregator(state_dir=state_dir)
+    resolved_state_dir = state_dir or default_state_dir()
     app = web.Application(middlewares=[_token_middleware(token)])
     app["token"] = token
     app["aggregator"] = aggregator
-    app["state_dir"] = state_dir or default_state_dir()
+    app["state_dir"] = resolved_state_dir
+    app["orchestrator"] = Orchestrator(court_root=resolved_state_dir.parent)
     app["frontend_dist"] = frontend_dist or _default_frontend_dist()
     app["fs_watcher_enabled"] = fs_watcher_enabled
     app["fs_watcher"] = None
 
     app.router.add_get("/api/healthz", handle_healthz)
     app.router.add_get("/api/status", handle_status)
+    app.router.add_get("/api/orchestrator/snapshot", handle_orchestrator_snapshot)
     app.router.add_get("/api/events", handle_events)
     app.router.add_post("/api/approve", handle_approve)
     app.router.add_post("/api/reject", handle_reject)
@@ -175,6 +179,13 @@ async def handle_status(request: web.Request) -> web.Response:
     aggregator: DashboardAggregator = request.app["aggregator"]
     snapshot = await aggregator.aggregate_status()
     return web.json_response(snapshot)
+
+
+async def handle_orchestrator_snapshot(request: web.Request) -> web.Response:
+    """SY-3 (#18): 旁挂只读视图. 不替换 /api/status, 跟它并行 (v1 边界)."""
+    orchestrator: Orchestrator = request.app["orchestrator"]
+    snap = await asyncio.to_thread(orchestrator.snapshot)
+    return web.json_response(snap.to_dict())
 
 
 # ---------------------------------------------------------------------------

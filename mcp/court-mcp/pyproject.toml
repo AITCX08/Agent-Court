@@ -42,4 +42,5 @@ py-modules = [
   "court_dashboard_server",
   "workflow_loader",
   "orchestrator",
+  "court_reconcile_cli",
 ]
