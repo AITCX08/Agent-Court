@@ -150,6 +150,7 @@ export interface BoardCard {
   color_bar: string;
   url: string;
   updated_at: string;
+  linked_team: string | null;
 }
 
 export interface GitBoard {
@@ -171,6 +172,13 @@ export function refreshGitBoard(scope?: GitBoardScope): Promise<{ ok: true }> {
 
 // PR-17a: Agent Teams
 export type AgentKind = 'ghostty' | 'tmux';
+
+export interface AgentTeamLink {
+  repo: string;
+  number: number;
+  kind: 'pr' | 'issue';
+  url: string;
+}
 
 export interface McpSubproc {
   pid: number;
@@ -198,6 +206,7 @@ export interface AgentTeam {
   windows: number;
   panes: AgentPane[];
   mcp_subprocs: McpSubproc[];
+  linked: AgentTeamLink | null;
   can_stream: boolean;
   can_stop: boolean;
 }
@@ -221,6 +230,23 @@ export function setAgentTeamLabel(
     cli: team.cli,
     started_at: team.started_at,
   });
+}
+
+export interface SpawnResult {
+  ok: true;
+  team_id: string;
+  session: string;
+  already_spawned: boolean;
+  linked: AgentTeamLink;
+}
+
+export function spawnAgent(input: {
+  repo: string;
+  number: number;
+  kind: 'pr' | 'issue';
+  url: string;
+}): Promise<SpawnResult> {
+  return call<SpawnResult>('POST', '/api/agent/spawn', input);
 }
 
 export function approve(
