@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { AlertTriangle, RefreshCw, Loader2 } from 'lucide-react';
 import {
@@ -16,7 +16,7 @@ import { KanbanColumn } from '../board/KanbanColumn';
 import { IssueCard } from '../board/IssueCard';
 
 const COLUMN_ORDER: GitBoardColumn[] = ['reviewed', 'reviewing', 'under_review', 'wip'];
-const AUTO_REFRESH_MS = 30_000;
+const AUTO_REFRESH_MS = 60_000;
 const SCOPE_LS_KEY = 'court-board-scope';
 
 function readStoredScope(): GitBoardScope {
@@ -29,35 +29,45 @@ export function GitBoardPage() {
   const { t } = useTranslation();
   const { push } = useToast();
   const [scope, setScope] = useState<GitBoardScope>(readStoredScope);
-  const [board, setBoard] = useState<GitBoard | null>(null);
+  const [boards, setBoards] = useState<Partial<Record<GitBoardScope, GitBoard>>>({});
+  const board = boards[scope] ?? null;
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const fetch = useCallback(async (s: GitBoardScope) => {
+  const inflightCancelledRef = useRef<{ cancelled: boolean }>({ cancelled: false });
+
+  const fetchFor = useCallback(async (s: GitBoardScope) => {
+    const token = { cancelled: false };
+    inflightCancelledRef.current.cancelled = true;
+    inflightCancelledRef.current = token;
     setLoading(true);
     setError(null);
     try {
       const data = await getGitBoard(s);
-      setBoard(data);
+      if (token.cancelled) return;
+      setBoards((prev) => ({ ...prev, [s]: data }));
     } catch (err) {
-      const msg = (err as Error).message;
-      setError(msg);
+      if (token.cancelled) return;
+      setError((err as Error).message);
     } finally {
-      setLoading(false);
+      if (!token.cancelled) setLoading(false);
     }
   }, []);
 
   useEffect(() => {
     localStorage.setItem(SCOPE_LS_KEY, scope);
-    fetch(scope);
-    const id = window.setInterval(() => fetch(scope), AUTO_REFRESH_MS);
-    return () => window.clearInterval(id);
-  }, [scope, fetch]);
+    fetchFor(scope);
+    const id = window.setInterval(() => fetchFor(scope), AUTO_REFRESH_MS);
+    return () => {
+      inflightCancelledRef.current.cancelled = true;
+      window.clearInterval(id);
+    };
+  }, [scope, fetchFor]);
 
   const onRefresh = async () => {
     try {
       await refreshGitBoard(scope);
-      await fetch(scope);
+      await fetchFor(scope);
     } catch (err) {
       push({ kind: 'err', text: (err as Error).message });
     }
@@ -78,7 +88,7 @@ export function GitBoardPage() {
       push({ kind: 'ok', text: t('git_board.card.spawn_success', { team: result.team_id }) });
       // new spawn → linked_team will appear on next snapshot, refresh to pull it
       await refreshGitBoard(scope);
-      await fetch(scope);
+      await fetchFor(scope);
     } catch (err) {
       push({ kind: 'err', text: t('git_board.card.spawn_error', { detail: (err as Error).message }) });
     }
@@ -129,17 +139,29 @@ export function GitBoardPage() {
       )}
 
       {/* 4 列 Kanban */}
-      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3">
-        {COLUMN_ORDER.map((col) => (
-          <KanbanColumn
-            key={col}
-            title={t(`git_board.column.${col}`)}
-            cards={board?.columns[col] ?? []}
-            emptyText={t('git_board.no_pr')}
-            onSpawnRequest={onSpawnRequest}
-            onJumpToTeam={onJumpToTeam}
-          />
-        ))}
+      <div className="relative">
+        {loading && !board && (
+          <div className="absolute inset-0 flex items-center justify-center
+                          pointer-events-none z-10">
+            <div className="text-xs text-fg-muted bg-bg-card/80 px-3 py-1.5
+                            rounded-md border border-border-base flex items-center gap-2">
+              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+              {t('common.loading')}
+            </div>
+          </div>
+        )}
+        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3">
+          {COLUMN_ORDER.map((col) => (
+            <KanbanColumn
+              key={col}
+              title={t(`git_board.column.${col}`)}
+              cards={board?.columns[col] ?? []}
+              emptyText={t('git_board.no_pr')}
+              onSpawnRequest={onSpawnRequest}
+              onJumpToTeam={onJumpToTeam}
+            />
+          ))}
+        </div>
       </div>
 
       {/* Issues 行 */}
