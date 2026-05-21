@@ -5,7 +5,9 @@
     "no_items": "No items",
     "save": "Save",
     "cancel": "Cancel",
-    "coming_soon": "Coming in next release"
+    "coming_soon": "Coming in next release",
+    "error": "Error",
+    "retry": "Retry"
   },
   "topbar": {
     "title": {
@@ -34,8 +36,32 @@
     "footer": "agent-court v0.2"
   },
   "git_board": {
-    "placeholder_title": "Git Board",
-    "placeholder_desc": "Aggregates PRs / issues relevant to me from git.k2lab.ai, grouped into WIP / Under Review / Reviewing / Reviewed columns. Coming with PR-16b after Gitea API integration."
+    "scope": {
+      "related": "Related",
+      "created": "Created",
+      "assigned": "Assigned",
+      "review": "Review",
+      "participating": "Participating",
+      "all": "All"
+    },
+    "column": {
+      "wip": "WIP",
+      "under_review": "Under Review",
+      "reviewing": "Reviewing",
+      "reviewed": "Recently Merged"
+    },
+    "card": {
+      "open": "open",
+      "wip": "draft",
+      "review": "review",
+      "spawn_agent": "Spawn agent"
+    },
+    "issues_section": "Issues",
+    "no_pr": "No PRs",
+    "no_issues": "No issues",
+    "stale_tag": "Stale",
+    "fetch_error": "Failed to fetch Gitea: {{detail}}",
+    "spawn_agent_toast": "Spawn agent comes in PR-17"
   },
   "agents": {
     "placeholder_title": "Agent Teams",

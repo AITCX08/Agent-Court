@@ -28,6 +28,8 @@ from dashboard_aggregator import (
 )
 from dashboard_tmux import SESSION_NAME as DASHBOARD_SESSION
 from dual_channel_approval import submit_verdict as approval_submit_verdict
+from gitea_client import GiteaClientError
+from git_board import GitBoardAggregator, list_scopes
 from log import get_logger
 from orchestrator import Orchestrator
 from seen_state import default_state_dir
@@ -57,11 +59,13 @@ def create_app(
     resolved_state_dir = state_dir or default_state_dir()
     orchestrator = Orchestrator(court_root=resolved_state_dir.parent)
     aggregator = DashboardAggregator(state_dir=state_dir, orchestrator=orchestrator)
+    git_board = GitBoardAggregator()
     app = web.Application(middlewares=[_token_middleware(token)])
     app["token"] = token
     app["aggregator"] = aggregator
     app["state_dir"] = resolved_state_dir
     app["orchestrator"] = orchestrator
+    app["git_board"] = git_board
     app["frontend_dist"] = frontend_dist or _default_frontend_dist()
     app["fs_watcher_enabled"] = fs_watcher_enabled
     app["fs_watcher"] = None
@@ -69,6 +73,8 @@ def create_app(
     app.router.add_get("/api/healthz", handle_healthz)
     app.router.add_get("/api/status", handle_status)
     app.router.add_get("/api/orchestrator/snapshot", handle_orchestrator_snapshot)
+    app.router.add_get("/api/git-board", handle_git_board)
+    app.router.add_post("/api/git-board/refresh", handle_git_board_refresh)
     app.router.add_get("/api/events", handle_events)
     app.router.add_post("/api/approve", handle_approve)
     app.router.add_post("/api/reject", handle_reject)
@@ -201,6 +207,37 @@ async def handle_orchestrator_snapshot(request: web.Request) -> web.Response:
     orchestrator: Orchestrator = request.app["orchestrator"]
     snap = await asyncio.to_thread(orchestrator.snapshot)
     return web.json_response(snap.to_dict())
+
+
+# ---------------------------------------------------------------------------
+# PR-16b: Git Board (Gitea 聚合)
+# ---------------------------------------------------------------------------
+
+
+async def handle_git_board(request: web.Request) -> web.Response:
+    scope = request.rel_url.query.get("scope", "related")
+    if scope not in list_scopes():
+        return web.json_response(
+            {"error": "invalid_scope", "scope": scope, "valid": list_scopes()},
+            status=400,
+        )
+    board: GitBoardAggregator = request.app["git_board"]
+    try:
+        result = await board.get_board(scope)
+    except GiteaClientError as exc:
+        return web.json_response(
+            {"error": "gitea_error", "detail": str(exc), "scope": scope},
+            status=502,
+        )
+    return web.json_response(result)
+
+
+async def handle_git_board_refresh(request: web.Request) -> web.Response:
+    body = await _read_json(request) or {}
+    scope = body.get("scope") if isinstance(body, dict) else None
+    board: GitBoardAggregator = request.app["git_board"]
+    board.invalidate(scope if isinstance(scope, str) else None)
+    return web.json_response({"ok": True, "scope": scope or "all"})
 
 
 # ---------------------------------------------------------------------------

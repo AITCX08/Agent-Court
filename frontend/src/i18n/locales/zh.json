@@ -5,7 +5,9 @@
     "no_items": "暂无内容",
     "save": "保存",
     "cancel": "取消",
-    "coming_soon": "下个版本上线"
+    "coming_soon": "下个版本上线",
+    "error": "出错了",
+    "retry": "重试"
   },
   "topbar": {
     "title": {
@@ -34,8 +36,32 @@
     "footer": "agent-court v0.2"
   },
   "git_board": {
-    "placeholder_title": "Git 看板",
-    "placeholder_desc": "聚合 git.k2lab.ai 上跟我相关的 PR / Issue, 按 WIP / 待评审 / 评审中 / 已评审 四列分组. PR-16b 接入 Gitea API 后上线."
+    "scope": {
+      "related": "相关",
+      "created": "我创建的",
+      "assigned": "指派给我",
+      "review": "等我评审",
+      "participating": "我参与的",
+      "all": "全部"
+    },
+    "column": {
+      "wip": "进行中",
+      "under_review": "待评审",
+      "reviewing": "评审中",
+      "reviewed": "近期已合"
+    },
+    "card": {
+      "open": "open",
+      "wip": "草稿",
+      "review": "待评审",
+      "spawn_agent": "派 Agent 处理"
+    },
+    "issues_section": "Issues",
+    "no_pr": "暂无 PR",
+    "no_issues": "暂无 Issue",
+    "stale_tag": "数据过期",
+    "fetch_error": "拉取 Gitea 失败: {{detail}}",
+    "spawn_agent_toast": "派 Agent 功能 PR-17 上线"
   },
   "agents": {
     "placeholder_title": "Agent 团队",
