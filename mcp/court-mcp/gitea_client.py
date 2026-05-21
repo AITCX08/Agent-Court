@@ -77,6 +77,25 @@ class GiteaClient:
                 issues.append(item)
         return issues
 
+    def search_issues(self, params: dict[str, str]) -> list[dict[str, Any]]:
+        """PR-16b 通用 search wrapper.
+
+        ``params`` 直接透传到 ``/repos/issues/search``. 常用键:
+
+        - ``type``: ``issues`` / ``pulls``
+        - ``state``: ``open`` / ``closed`` / ``all`` (默认 ``open``)
+        - ``assigned`` / ``created`` / ``mentioned`` / ``review_requested`` /
+          ``reviewed``: 布尔字符串 ``"true"`` (for 当前 token user)
+        - ``labels``: comma-separated label names
+        - ``owner`` / ``team``
+
+        分页用 ``_paginate`` 自动展开; 返回全部 result 拍平.
+        """
+        items: list[dict[str, Any]] = []
+        for page in self._paginate("/repos/issues/search", params=dict(params)):
+            items.extend(page)
+        return items
+
     def get_issue(self, repo: str, number: int) -> dict[str, Any]:
         owner, name = self._split_repo(repo)
         return self._request_json("GET", f"/repos/{owner}/{name}/issues/{number}")

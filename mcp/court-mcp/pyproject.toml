@@ -46,4 +46,5 @@ py-modules = [
   "workspace_manager",
   "github_client",
   "tracker_factory",
+  "git_board",
 ]

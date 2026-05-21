@@ -135,6 +135,40 @@ export function getStatus(): Promise<Status> {
   return call<Status>('GET', '/api/status');
 }
 
+// PR-16b: Git Board
+export type GitBoardScope =
+  | 'related' | 'created' | 'assigned' | 'review' | 'participating' | 'all';
+export type GitBoardColumn = 'wip' | 'under_review' | 'reviewing' | 'reviewed';
+
+export interface BoardCard {
+  kind: 'pr' | 'issue';
+  repo: string;
+  number: number;
+  title: string;
+  state: string;
+  tags: string[];
+  color_bar: string;
+  url: string;
+  updated_at: string;
+}
+
+export interface GitBoard {
+  scope: GitBoardScope;
+  updated_at: string;
+  stale: boolean;
+  columns: Record<GitBoardColumn, BoardCard[]>;
+  issues_row: BoardCard[];
+  error?: string;
+}
+
+export function getGitBoard(scope: GitBoardScope): Promise<GitBoard> {
+  return call<GitBoard>('GET', `/api/git-board?scope=${encodeURIComponent(scope)}`);
+}
+
+export function refreshGitBoard(scope?: GitBoardScope): Promise<{ ok: true }> {
+  return call('POST', '/api/git-board/refresh', scope ? { scope } : {});
+}
+
 export function approve(
   pending: Pick<Pending, 'slug_id' | 'repo' | 'number' | 'stage'>,
   reason = ''
