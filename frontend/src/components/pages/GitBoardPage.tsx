@@ -21,7 +21,7 @@ const SCOPE_LS_KEY = 'court-board-scope';
 function readStoredScope(): GitBoardScope {
   const stored = localStorage.getItem(SCOPE_LS_KEY);
   const valid: GitBoardScope[] = ['related', 'created', 'assigned', 'review', 'participating', 'all'];
-  return (valid as string[]).includes(stored ?? '') ? (stored as GitBoardScope) : 'related';
+  return (valid as string[]).includes(stored ?? '') ? (stored as GitBoardScope) : 'all';
 }
 
 export function GitBoardPage() {
