@@ -114,3 +114,59 @@ def test_spawn_tmux_new_session_failure_no_link_written(monkeypatch, links):
     with pytest.raises(ag.SpawnError):
         spawner.spawn(repo="K2Lab/foo", number=441, kind="pr", url="x")
     assert links.lookup_by_team("agent-team-abc12345") is None
+
+
+def test_kill_rejects_invalid_prefix(links):
+    spawner = ag.AgentSpawner(team_links=links)
+    with pytest.raises(ValueError):
+        spawner.kill("ghostty:ttys025")
+    with pytest.raises(ValueError):
+        spawner.kill("agent-team-xyz")  # 缺 tmux: 前缀
+
+
+def test_kill_calls_tmux_and_removes_link(monkeypatch, links):
+    links.set_link("agent-team-tokill", "K2Lab/foo", 1, "pr", "url")
+    run_calls: list[list[str]] = []
+
+    def fake_run(args, **_):
+        run_calls.append(list(args))
+        return MagicMock(returncode=0, stderr="")
+
+    monkeypatch.setattr(ag.subprocess, "run", fake_run)
+    spawner = ag.AgentSpawner(team_links=links)
+    result = spawner.kill("tmux:agent-team-tokill")
+    assert result["ok"] is True
+    assert result["session"] == "agent-team-tokill"
+    kill_calls = [c for c in run_calls if "kill-session" in c]
+    assert len(kill_calls) == 1
+    assert "agent-team-tokill" in kill_calls[0]
+    # link 应被清掉
+    assert links.lookup_by_team("agent-team-tokill") is None
+
+
+def test_kill_session_not_found_is_idempotent(monkeypatch, links):
+    """tmux 已 dead 的 session, kill 应不报错, 仍清 link."""
+    links.set_link("agent-team-gone", "K2Lab/foo", 1, "pr", "url")
+
+    def fake_run(args, **_):
+        return MagicMock(returncode=1, stderr="can't find session: agent-team-gone")
+
+    monkeypatch.setattr(ag.subprocess, "run", fake_run)
+    spawner = ag.AgentSpawner(team_links=links)
+    result = spawner.kill("tmux:agent-team-gone")
+    assert result["ok"] is True
+    assert links.lookup_by_team("agent-team-gone") is None
+
+
+def test_kill_other_tmux_error_raises_spawnerror(monkeypatch, links):
+    links.set_link("agent-team-evil", "K2Lab/foo", 1, "pr", "url")
+
+    def fake_run(args, **_):
+        return MagicMock(returncode=1, stderr="server not running on socket")
+
+    monkeypatch.setattr(ag.subprocess, "run", fake_run)
+    spawner = ag.AgentSpawner(team_links=links)
+    with pytest.raises(ag.SpawnError):
+        spawner.kill("tmux:agent-team-evil")
+    # 失败时 link 不清 (resource leak 总比删错 ID 好)
+    assert links.lookup_by_team("agent-team-evil") is not None

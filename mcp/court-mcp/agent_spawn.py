@@ -82,3 +82,26 @@ class AgentSpawner:
             "already_spawned": False,
             "linked": {"repo": repo, "number": number, "kind": kind, "url": url},
         }
+
+    def kill(self, team_id: str) -> dict[str, Any]:
+        """Kill tmux session + remove link entry.
+
+        team_id 必须以 ``tmux:agent-team-`` 开头 (防误杀外部 tmux session).
+        AgentTeam.id 是 ``tmux:agent-team-xxx`` 格式; agent_spawn 内部用的是
+        raw session 名 (`agent-team-xxx`), 所以这里要去前缀.
+        """
+        prefix = "tmux:agent-team-"
+        if not team_id.startswith(prefix):
+            raise ValueError(f"team_id must start with {prefix!r}, got {team_id!r}")
+        session_name = team_id[len("tmux:"):]   # 去掉 "tmux:" 前缀, 保留 agent-team-xxx
+        proc = subprocess.run(
+            ["tmux", "kill-session", "-t", session_name],
+            capture_output=True, text=True,
+        )
+        if proc.returncode != 0:
+            # session 不存在也算成功 (幂等), 但其他错误抛出
+            stderr = proc.stderr.strip()
+            if "no such" not in stderr.lower() and "can't find" not in stderr.lower():
+                raise SpawnError(f"tmux kill-session failed: {stderr}")
+        self.team_links.remove_link(session_name)
+        return {"ok": True, "team_id": team_id, "session": session_name}
