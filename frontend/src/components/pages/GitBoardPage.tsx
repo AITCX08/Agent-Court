@@ -6,10 +6,10 @@ import {
   refreshGitBoard,
   spawnAgent,
   type BoardCard,
-  type GitBoard,
   type GitBoardColumn,
   type GitBoardScope,
 } from '../../lib/api';
+import { useStore } from '../../lib/store';
 import { useToast } from '../Toast';
 import { ScopeTabs } from '../board/ScopeTabs';
 import { KanbanColumn } from '../board/KanbanColumn';
@@ -29,7 +29,8 @@ export function GitBoardPage() {
   const { t } = useTranslation();
   const { push } = useToast();
   const [scope, setScope] = useState<GitBoardScope>(readStoredScope);
-  const [boards, setBoards] = useState<Partial<Record<GitBoardScope, GitBoard>>>({});
+  const boards = useStore((s) => s.gitBoards);
+  const setBoardForScope = useStore((s) => s.setGitBoard);
   const board = boards[scope] ?? null;
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -45,14 +46,14 @@ export function GitBoardPage() {
     try {
       const data = await getGitBoard(s);
       if (token.cancelled) return;
-      setBoards((prev) => ({ ...prev, [s]: data }));
+      setBoardForScope(s, data);
     } catch (err) {
       if (token.cancelled) return;
       setError((err as Error).message);
     } finally {
       if (!token.cancelled) setLoading(false);
     }
-  }, []);
+  }, [setBoardForScope]);
 
   useEffect(() => {
     localStorage.setItem(SCOPE_LS_KEY, scope);
