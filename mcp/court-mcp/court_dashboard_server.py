@@ -336,7 +336,10 @@ def _add_static_routes(app: web.Application) -> None:
         dist: Path = request.app["frontend_dist"]
         index = dist / "index.html"
         if index.exists():
-            return web.FileResponse(index)
+            # PR-16a: HTML shell 自身没 hash, 必须禁缓存; 否则浏览器抓老 HTML
+            # → 引用过期的 /assets/index-<hash>.js → 升级后看到老 UI (Edge 实测).
+            # assets/* 路径走 hash, 仍是默认长缓存.
+            return web.FileResponse(index, headers={"Cache-Control": "no-store"})
         return _render_missing_dist(dist)
 
     app.router.add_get("/", serve_index)

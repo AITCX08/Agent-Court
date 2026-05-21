@@ -1,0 +1,47 @@
+{
+  "common": {
+    "refresh": "Refresh",
+    "loading": "Loading...",
+    "no_items": "No items",
+    "save": "Save",
+    "cancel": "Cancel",
+    "coming_soon": "Coming in next release"
+  },
+  "topbar": {
+    "title": {
+      "git_board": "Board",
+      "agents": "Agents",
+      "court_runtime": "Court Runtime"
+    },
+    "updated_at": "Updated {{time}}",
+    "theme": {
+      "to_light": "Switch to light",
+      "to_dark": "Switch to dark"
+    },
+    "lang": {
+      "zh": "中",
+      "en": "EN"
+    }
+  },
+  "sidebar": {
+    "menu": {
+      "git_board": "Git Board",
+      "agents": "Agents",
+      "court_runtime": "Court Runtime"
+    },
+    "collapse": "Collapse",
+    "expand": "Expand",
+    "footer": "agent-court v0.2"
+  },
+  "git_board": {
+    "placeholder_title": "Git Board",
+    "placeholder_desc": "Aggregates PRs / issues relevant to me from git.k2lab.ai, grouped into WIP / Under Review / Reviewing / Reviewed columns. Coming with PR-16b after Gitea API integration."
+  },
+  "agents": {
+    "placeholder_title": "Agent Teams",
+    "placeholder_desc": "Visualizes all agent teams running in ghostty / tmux. Supports spawning new agents and live output. Coming with PR-17."
+  },
+  "court_runtime": {
+    "subtitle": "Existing dashboard moved into this menu. Orchestrator health / pending approvals / watcher / receiver / tmux all live here."
+  }
+}
