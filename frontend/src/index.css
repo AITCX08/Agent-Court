@@ -2,16 +2,78 @@
 @tailwind components;
 @tailwind utilities;
 
+/* PR-16a 双主题 CSS 变量. inline script in index.html 在 React 挂载前
+   就把 [data-theme] 写到 <html>, 避免首屏白闪. */
+:root[data-theme='dark'] {
+  --bg-base: #0a0a0a;
+  --bg-card: #171717;
+  --bg-card-hover: #1c1c1c;
+  --bg-sidebar: #111111;
+  --fg-primary: #f0f0f0;
+  --fg-secondary: #a0a0a0;
+  --fg-muted: #666666;
+  --border-base: #262626;
+  --border-strong: #404040;
+  --accent-primary: #2563eb;
+  --accent-warn: #f59e0b;
+  --accent-danger: #ef4444;
+  --accent-success: #10b981;
+  --accent-purple: #8b5cf6;
+}
+
+:root[data-theme='light'] {
+  --bg-base: #fbfbfc;
+  --bg-card: #ffffff;
+  --bg-card-hover: #f9fafb;
+  --bg-sidebar: #f3f4f6;
+  --fg-primary: #171717;
+  --fg-secondary: #525252;
+  --fg-muted: #9ca3af;
+  --border-base: #e5e7eb;
+  --border-strong: #d1d5db;
+  --accent-primary: #2563eb;
+  --accent-warn: #f59e0b;
+  --accent-danger: #dc2626;
+  --accent-success: #16a34a;
+  --accent-purple: #7c3aed;
+}
+
+/* 没 data-theme 时兜底 = dark, 防止 inline script 失败时全黑屏 */
+:root:not([data-theme]) {
+  --bg-base: #0a0a0a;
+  --bg-card: #171717;
+  --bg-card-hover: #1c1c1c;
+  --bg-sidebar: #111111;
+  --fg-primary: #f0f0f0;
+  --fg-secondary: #a0a0a0;
+  --fg-muted: #666666;
+  --border-base: #262626;
+  --border-strong: #404040;
+  --accent-primary: #2563eb;
+  --accent-warn: #f59e0b;
+  --accent-danger: #ef4444;
+  --accent-success: #10b981;
+  --accent-purple: #8b5cf6;
+}
+
 @layer base {
   html, body, #root {
     height: 100%;
   }
   body {
-    font-family: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Helvetica, 'PingFang SC', sans-serif;
+    /* 中英混排自然; 不引付费 Sohne / Inter web font */
+    font-family:
+      ui-sans-serif, system-ui, -apple-system, 'PingFang SC',
+      'Microsoft YaHei', 'Source Han Sans CN',
+      Helvetica, Arial, sans-serif;
+    background: var(--bg-base);
+    color: var(--fg-primary);
   }
 }
 
 @layer components {
+  /* 旧 glass 工具类: PR-15 legacy 组件 (Court Runtime page) 仍在用,
+     保留向后兼容. 新组件请用 bg-bg-card / border-border-base 等 tokens. */
   .glass {
     @apply bg-white/[0.04] backdrop-blur-xl border border-white/10;
   }

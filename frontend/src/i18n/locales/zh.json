@@ -1,0 +1,47 @@
+{
+  "common": {
+    "refresh": "刷新",
+    "loading": "加载中...",
+    "no_items": "暂无内容",
+    "save": "保存",
+    "cancel": "取消",
+    "coming_soon": "下个版本上线"
+  },
+  "topbar": {
+    "title": {
+      "git_board": "看板",
+      "agents": "Agent 团队",
+      "court_runtime": "Court 运行态"
+    },
+    "updated_at": "更新于 {{time}}",
+    "theme": {
+      "to_light": "切换到浅色",
+      "to_dark": "切换到深色"
+    },
+    "lang": {
+      "zh": "中",
+      "en": "EN"
+    }
+  },
+  "sidebar": {
+    "menu": {
+      "git_board": "Git 看板",
+      "agents": "Agent 团队",
+      "court_runtime": "Court 运行态"
+    },
+    "collapse": "折叠",
+    "expand": "展开",
+    "footer": "agent-court v0.2"
+  },
+  "git_board": {
+    "placeholder_title": "Git 看板",
+    "placeholder_desc": "聚合 git.k2lab.ai 上跟我相关的 PR / Issue, 按 WIP / 待评审 / 评审中 / 已评审 四列分组. PR-16b 接入 Gitea API 后上线."
+  },
+  "agents": {
+    "placeholder_title": "Agent 团队",
+    "placeholder_desc": "可视化所有 ghostty / tmux 里跑着的 agent 团队, 支持启动新 agent + 实时查看输出. PR-17 上线."
+  },
+  "court_runtime": {
+    "subtitle": "现有 dashboard 收纳到此菜单. Orchestrator 健康 / 待审批 / Watcher / Receiver / Tmux 都在."
+  }
+}

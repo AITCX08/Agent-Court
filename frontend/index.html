@@ -1,11 +1,25 @@
 <!doctype html>
-<html lang="zh-CN" class="dark">
+<html lang="zh-CN">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>court-dashboard</title>
+    <script>
+      // PR-16a 防闪屏: React 挂载前就根据 localStorage 设好 data-theme + lang.
+      // 如果没存过, 默认 dark + zh.
+      (function () {
+        try {
+          var theme = localStorage.getItem('court-theme') || 'dark';
+          var lang = localStorage.getItem('court-lang') || 'zh';
+          document.documentElement.setAttribute('data-theme', theme);
+          document.documentElement.setAttribute('lang', lang === 'zh' ? 'zh-CN' : 'en');
+        } catch (_) {
+          document.documentElement.setAttribute('data-theme', 'dark');
+        }
+      })();
+    </script>
   </head>
-  <body class="bg-ink-900 text-slate-200 antialiased">
+  <body class="antialiased">
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
