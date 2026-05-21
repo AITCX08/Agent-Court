@@ -169,6 +169,60 @@ export function refreshGitBoard(scope?: GitBoardScope): Promise<{ ok: true }> {
   return call('POST', '/api/git-board/refresh', scope ? { scope } : {});
 }
 
+// PR-17a: Agent Teams
+export type AgentKind = 'ghostty' | 'tmux';
+
+export interface McpSubproc {
+  pid: number;
+  command: string;
+  name: string;
+}
+
+export interface AgentPane {
+  index: number;
+  pid: number;
+  command: string;
+  started_at: string;
+}
+
+export interface AgentTeam {
+  id: string;
+  kind: AgentKind;
+  label: string;
+  cli: string;
+  pid: number | null;
+  started_at: string;
+  cwd: string;
+  tty: string;
+  session: string;
+  windows: number;
+  panes: AgentPane[];
+  mcp_subprocs: McpSubproc[];
+  can_stream: boolean;
+  can_stop: boolean;
+}
+
+export interface AgentTeamsSnapshot {
+  updated_at: string;
+  teams: AgentTeam[];
+}
+
+export function getAgentTeams(): Promise<AgentTeamsSnapshot> {
+  return call<AgentTeamsSnapshot>('GET', '/api/agent-teams');
+}
+
+export function setAgentTeamLabel(
+  team: Pick<AgentTeam, 'id' | 'cli' | 'started_at'>,
+  label: string,
+): Promise<{ ok: true }> {
+  return call('POST', '/api/agent/team-label', {
+    id: team.id,
+    label,
+    cli: team.cli,
+    started_at: team.started_at,
+  });
+}
+
 export function approve(
   pending: Pick<Pending, 'slug_id' | 'repo' | 'number' | 'stage'>,
   reason = ''

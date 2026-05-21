@@ -61,11 +61,28 @@
     "no_issues": "No issues",
     "stale_tag": "Stale",
     "fetch_error": "Failed to fetch Gitea: {{detail}}",
-    "spawn_agent_toast": "Spawn agent comes in PR-17"
+    "spawn_agent_toast": "Spawn agent comes in PR-17b"
   },
   "agents": {
-    "placeholder_title": "Agent Teams",
-    "placeholder_desc": "Visualizes all agent teams running in ghostty / tmux. Supports spawning new agents and live output. Coming with PR-17."
+    "title_count": "Active agents",
+    "subtitle": "Aggregates claude/codex running in ghostty terminals + tmux sessions spawned by the dashboard. Spawn / kill in PR-17b, live output in PR-17c.",
+    "card": {
+      "kind_ghostty": "Local terminal",
+      "kind_tmux": "Dashboard-spawned",
+      "started_at": "Started",
+      "pid_short": "PID",
+      "session_short": "Session",
+      "windows": "{{count}} windows",
+      "subprocs": "MCP subprocs",
+      "no_subprocs": "none",
+      "label_placeholder": "Add a business label",
+      "label_edit": "Edit label",
+      "label_save": "Save",
+      "label_cancel": "Cancel",
+      "label_saved": "Label saved"
+    },
+    "empty": "No agents running. Open claude in a ghostty tab and it appears within seconds.",
+    "fetch_error": "Failed to load agents: {{detail}}"
   },
   "court_runtime": {
     "subtitle": "Existing dashboard moved into this menu. Orchestrator health / pending approvals / watcher / receiver / tmux all live here."
