@@ -14,7 +14,7 @@ import { ScopeTabs } from '../board/ScopeTabs';
 import { KanbanColumn } from '../board/KanbanColumn';
 import { IssueCard } from '../board/IssueCard';
 
-const COLUMN_ORDER: GitBoardColumn[] = ['wip', 'under_review', 'reviewing', 'reviewed'];
+const COLUMN_ORDER: GitBoardColumn[] = ['reviewed', 'reviewing', 'under_review', 'wip'];
 const AUTO_REFRESH_MS = 30_000;
 const SCOPE_LS_KEY = 'court-board-scope';
 
