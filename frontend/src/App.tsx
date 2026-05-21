@@ -7,6 +7,7 @@ import { WatcherStatusCard } from './components/WatcherStatusCard';
 import { ReceiverStatusCard } from './components/ReceiverStatusCard';
 import { TmuxPanel } from './components/TmuxPanel';
 import { ActivityFeed } from './components/ActivityFeed';
+import { OrchestratorHealthPanel } from './components/OrchestratorHealthPanel';
 import { ToastProvider } from './components/Toast';
 
 export default function App() {
@@ -31,6 +32,7 @@ function Dashboard() {
           <ActivityFeed events={activity} />
         </div>
         <aside className="space-y-5">
+          <OrchestratorHealthPanel orchestrator={status?.orchestrator} />
           <PendingPanel pending={status?.pending ?? []} />
           <div className="space-y-3">
             <WatcherStatusCard watcher={status?.watcher ?? { alive: false, pid: null }} />

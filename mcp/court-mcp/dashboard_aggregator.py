@@ -23,6 +23,7 @@ from typing import Any, Callable
 from dashboard_tmux import SESSION_NAME as DASHBOARD_SESSION
 from dashboard_tmux import WATCHER_WINDOW
 from log import get_logger
+from orchestrator import Orchestrator
 from seen_state import default_state_dir, load_seen, state_lock
 
 CACHE_TTL_SECONDS = 1.0
@@ -33,8 +34,16 @@ _log = get_logger("dashboard-aggregator")
 
 
 class DashboardAggregator:
-    def __init__(self, state_dir: Path | None = None) -> None:
+    def __init__(
+        self,
+        state_dir: Path | None = None,
+        *,
+        orchestrator: Orchestrator | None = None,
+    ) -> None:
         self._state_dir = state_dir or default_state_dir()
+        # orchestrator 跟 aggregator 共享 court_root (state_dir 的父级);
+        # 注入可空, 测试或独立用 aggregator 时不强制带.
+        self._orchestrator = orchestrator or Orchestrator(court_root=self._state_dir.parent)
         self._cache: dict[str, Any] | None = None
         self._cache_ts: float = 0.0
         self._cache_lock = asyncio.Lock()
@@ -84,12 +93,13 @@ class DashboardAggregator:
             self.unsubscribe(q)
 
     async def _collect(self) -> dict[str, Any]:
-        tmux_state, pending, seen_data, watcher_info, receiver_info = await asyncio.gather(
+        tmux_state, pending, seen_data, watcher_info, receiver_info, orchestrator_snap = await asyncio.gather(
             _collect_tmux_state(),
             asyncio.to_thread(_collect_pending, self._state_dir),
             asyncio.to_thread(_load_seen_safe, self._state_dir),
             _collect_process_info("gitea_watcher"),
             _collect_process_info("gitea_webhook_receiver", port=RECEIVER_DEFAULT_PORT),
+            asyncio.to_thread(self._orchestrator.snapshot),
         )
         courts = _derive_courts(tmux_state["windows"], pending, seen_data)
         return {
@@ -99,6 +109,8 @@ class DashboardAggregator:
             "seen_issues_count": len(seen_data),
             "watcher": watcher_info,
             "receiver": receiver_info,
+            # SY-3 v2 渐进切换: 暴露 orchestrator 视图给前端 (courts 字段 v3 再彻底切).
+            "orchestrator": orchestrator_snap.to_dict(),
             "ts": int(time.time()),
         }
 
