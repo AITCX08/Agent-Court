@@ -22,6 +22,7 @@ from typing import Any, Awaitable, Callable
 
 from aiohttp import web
 
+from agent_spawn import AgentSpawner, SpawnError
 from agent_teams import AgentTeamAggregator
 from dashboard_aggregator import (
     CACHE_TTL_SECONDS,
@@ -32,6 +33,7 @@ from dashboard_tmux import SESSION_NAME as DASHBOARD_SESSION
 from dual_channel_approval import submit_verdict as approval_submit_verdict
 from gitea_client import GiteaClientError
 from git_board import GitBoardAggregator, list_scopes
+from team_links import TeamLinks
 from log import get_logger
 from orchestrator import Orchestrator
 from seen_state import default_state_dir
@@ -59,10 +61,12 @@ def create_app(
         raise ValueError("token must be non-empty")
 
     resolved_state_dir = state_dir or default_state_dir()
+    team_links = TeamLinks(court_root=resolved_state_dir.parent)
+    agent_spawner = AgentSpawner(team_links=team_links)
     orchestrator = Orchestrator(court_root=resolved_state_dir.parent)
     aggregator = DashboardAggregator(state_dir=state_dir, orchestrator=orchestrator)
-    git_board = GitBoardAggregator()
-    agent_teams = AgentTeamAggregator(court_root=resolved_state_dir.parent)
+    git_board = GitBoardAggregator(team_links=team_links)
+    agent_teams = AgentTeamAggregator(court_root=resolved_state_dir.parent, team_links=team_links)
     app = web.Application(middlewares=[_token_middleware(token)])
     app["token"] = token
     app["aggregator"] = aggregator
@@ -70,6 +74,8 @@ def create_app(
     app["orchestrator"] = orchestrator
     app["git_board"] = git_board
     app["agent_teams"] = agent_teams
+    app["team_links"] = team_links
+    app["agent_spawner"] = agent_spawner
     app["frontend_dist"] = frontend_dist or _default_frontend_dist()
     app["fs_watcher_enabled"] = fs_watcher_enabled
     app["fs_watcher"] = None
@@ -81,6 +87,7 @@ def create_app(
     app.router.add_post("/api/git-board/refresh", handle_git_board_refresh)
     app.router.add_get("/api/agent-teams", handle_agent_teams)
     app.router.add_post("/api/agent/team-label", handle_agent_team_label)
+    app.router.add_post("/api/agent/spawn", handle_agent_spawn)
     app.router.add_get("/api/events", handle_events)
     app.router.add_post("/api/approve", handle_approve)
     app.router.add_post("/api/reject", handle_reject)
@@ -282,6 +289,34 @@ async def handle_agent_team_label(request: web.Request) -> web.Response:
     result = await asyncio.to_thread(
         aggregator.set_label, team_id, label.strip(), cli=cli, started_at=started_at
     )
+    return web.json_response({"ok": True, **result})
+
+
+async def handle_agent_spawn(request: web.Request) -> web.Response:
+    body = await _read_json(request)
+    if not isinstance(body, dict):
+        return web.json_response({"error": "invalid_json"}, status=400)
+    repo = body.get("repo")
+    number = body.get("number")
+    kind = body.get("kind", "pr")
+    url = body.get("url", "")
+    if not isinstance(repo, str) or "/" not in repo:
+        return web.json_response({"error": "invalid_repo"}, status=400)
+    if not isinstance(number, int) or number <= 0:
+        return web.json_response({"error": "invalid_number"}, status=400)
+    if kind not in ("pr", "issue"):
+        return web.json_response({"error": "invalid_kind"}, status=400)
+    if not isinstance(url, str):
+        return web.json_response({"error": "invalid_url"}, status=400)
+    spawner: AgentSpawner = request.app["agent_spawner"]
+    try:
+        result = await asyncio.to_thread(
+            spawner.spawn, repo=repo, number=int(number), kind=kind, url=url,
+        )
+    except SpawnError as exc:
+        return web.json_response({"error": "spawn_failed", "detail": str(exc)}, status=500)
+    # spawn 后 git-board cache 可能过期 (linked_team 字段会变), 让前端 refresh 取最新
+    request.app["git_board"].invalidate()
     return web.json_response({"ok": True, **result})
 
 
