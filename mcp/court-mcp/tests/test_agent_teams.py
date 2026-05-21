@@ -18,6 +18,7 @@ HERE = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(HERE))
 
 import agent_teams as at  # noqa: E402
+import team_links as tl  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
@@ -230,7 +231,6 @@ def test_lstart_parse_failure_returns_empty(monkeypatch, tmp_path):
 
 def test_snapshot_joins_team_links(monkeypatch, tmp_path):
     """tmux team 若在 team_links 里有记录, snapshot 给附 linked 字段."""
-    import team_links as tl
     links = tl.TeamLinks(court_root=tmp_path)
     links.set_link("agent-team-xyz789", "K2Lab/foo", 441, "pr",
                    "https://git.k2lab.ai/K2Lab/foo/pulls/441")
@@ -244,7 +244,7 @@ def test_snapshot_joins_team_links(monkeypatch, tmp_path):
 
 
 def test_snapshot_unlinked_team_linked_is_none(monkeypatch, tmp_path):
-    import team_links as tl
+    """没在 team_links 里的 team, snapshot 的 linked 字段保持 None."""
     links = tl.TeamLinks(court_root=tmp_path)
     _patch_ps(monkeypatch, [("ttys025", 200, "00:30", "Claude", "Thu May 21 10:19:37 2026")])
     _patch_tmux(monkeypatch, [])

@@ -23,7 +23,7 @@ import os
 import re
 import subprocess
 import time
-from dataclasses import dataclass, asdict, field
+from dataclasses import dataclass, asdict, field, replace
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -79,15 +79,14 @@ class AgentTeamAggregator:
         labels = self._load_labels()
         ghostty_teams = self._collect_ghostty(labels)
         tmux_teams = self._collect_tmux(labels)
-        # PR-17b: 给每 team 附 linked (从 team_links 反查)
-        # team_links 用原始 session 名 (无 "tmux:" 前缀) 作 key
-        from dataclasses import replace
-        for team_list in (ghostty_teams, tmux_teams):
-            for i, team in enumerate(team_list):
-                lookup_key = team.session if team.kind == "tmux" else team.id
-                linked = self.team_links.lookup_by_team(lookup_key)
-                if linked:
-                    team_list[i] = replace(team, linked=linked)
+        # PR-17b: 给 tmux team 附 linked (从 team_links 反查).
+        # team_links 用原始 session 名作 key (agent_spawn.py 落的格式), 跟
+        # AgentTeam.id 的 "tmux:" 前缀不一致, 所以这里用 team.session lookup.
+        # ghostty team 暂无对应 spawn 链路, 不查 team_links.
+        for i, team in enumerate(tmux_teams):
+            linked = self.team_links.lookup_by_team(team.session)
+            if linked:
+                tmux_teams[i] = replace(team, linked=linked)
         # ghostty 先排 (按 started_at desc), 再 tmux
         ghostty_teams.sort(key=lambda t: t.started_at, reverse=True)
         tmux_teams.sort(key=lambda t: t.started_at, reverse=True)
