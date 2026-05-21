@@ -4,6 +4,7 @@ import { AlertTriangle, RefreshCw, Loader2 } from 'lucide-react';
 import {
   getGitBoard,
   refreshGitBoard,
+  spawnAgent,
   type BoardCard,
   type GitBoard,
   type GitBoardColumn,
@@ -14,14 +15,14 @@ import { ScopeTabs } from '../board/ScopeTabs';
 import { KanbanColumn } from '../board/KanbanColumn';
 import { IssueCard } from '../board/IssueCard';
 
-const COLUMN_ORDER: GitBoardColumn[] = ['wip', 'under_review', 'reviewing', 'reviewed'];
+const COLUMN_ORDER: GitBoardColumn[] = ['reviewed', 'reviewing', 'under_review', 'wip'];
 const AUTO_REFRESH_MS = 30_000;
 const SCOPE_LS_KEY = 'court-board-scope';
 
 function readStoredScope(): GitBoardScope {
   const stored = localStorage.getItem(SCOPE_LS_KEY);
   const valid: GitBoardScope[] = ['related', 'created', 'assigned', 'review', 'participating', 'all'];
-  return (valid as string[]).includes(stored ?? '') ? (stored as GitBoardScope) : 'related';
+  return (valid as string[]).includes(stored ?? '') ? (stored as GitBoardScope) : 'all';
 }
 
 export function GitBoardPage() {
@@ -62,8 +63,29 @@ export function GitBoardPage() {
     }
   };
 
-  const onSpawn = (_card: BoardCard) => {
-    push({ kind: 'ok', text: t('git_board.spawn_agent_toast') });
+  const onSpawnRequest = async (card: BoardCard) => {
+    try {
+      const result = await spawnAgent({
+        repo: card.repo,
+        number: card.number,
+        kind: card.kind,
+        url: card.url,
+      });
+      if (result.already_spawned) {
+        push({ kind: 'ok', text: t('git_board.card.spawn_already') });
+        return;
+      }
+      push({ kind: 'ok', text: t('git_board.card.spawn_success', { team: result.team_id }) });
+      // new spawn → linked_team will appear on next snapshot, refresh to pull it
+      await refreshGitBoard(scope);
+      await fetch(scope);
+    } catch (err) {
+      push({ kind: 'err', text: t('git_board.card.spawn_error', { detail: (err as Error).message }) });
+    }
+  };
+
+  const onJumpToTeam = (_teamId: string) => {
+    window.location.hash = '/agents';
   };
 
   return (
@@ -114,7 +136,8 @@ export function GitBoardPage() {
             title={t(`git_board.column.${col}`)}
             cards={board?.columns[col] ?? []}
             emptyText={t('git_board.no_pr')}
-            onSpawn={onSpawn}
+            onSpawnRequest={onSpawnRequest}
+            onJumpToTeam={onJumpToTeam}
           />
         ))}
       </div>
@@ -132,7 +155,12 @@ export function GitBoardPage() {
         ) : (
           <div className="flex gap-2 overflow-x-auto pb-2 pl-1 pr-1">
             {board?.issues_row.map((card) => (
-              <IssueCard key={`${card.repo}#${card.number}`} card={card} />
+              <IssueCard
+                key={`${card.repo}#${card.number}`}
+                card={card}
+                onSpawnRequest={onSpawnRequest}
+                onJumpToTeam={onJumpToTeam}
+              />
             ))}
           </div>
         )}

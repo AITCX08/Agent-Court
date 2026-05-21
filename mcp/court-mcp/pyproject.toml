@@ -47,4 +47,7 @@ py-modules = [
   "github_client",
   "tracker_factory",
   "git_board",
+  "agent_teams",
+  "team_links",
+  "agent_spawn",
 ]

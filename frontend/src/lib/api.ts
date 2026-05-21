@@ -150,6 +150,7 @@ export interface BoardCard {
   color_bar: string;
   url: string;
   updated_at: string;
+  linked_team: string | null;
 }
 
 export interface GitBoard {
@@ -167,6 +168,85 @@ export function getGitBoard(scope: GitBoardScope): Promise<GitBoard> {
 
 export function refreshGitBoard(scope?: GitBoardScope): Promise<{ ok: true }> {
   return call('POST', '/api/git-board/refresh', scope ? { scope } : {});
+}
+
+// PR-17a: Agent Teams
+export type AgentKind = 'ghostty' | 'tmux';
+
+export interface AgentTeamLink {
+  repo: string;
+  number: number;
+  kind: 'pr' | 'issue';
+  url: string;
+}
+
+export interface McpSubproc {
+  pid: number;
+  command: string;
+  name: string;
+}
+
+export interface AgentPane {
+  index: number;
+  pid: number;
+  command: string;
+  started_at: string;
+}
+
+export interface AgentTeam {
+  id: string;
+  kind: AgentKind;
+  label: string;
+  cli: string;
+  pid: number | null;
+  started_at: string;
+  cwd: string;
+  tty: string;
+  session: string;
+  windows: number;
+  panes: AgentPane[];
+  mcp_subprocs: McpSubproc[];
+  linked: AgentTeamLink | null;
+  can_stream: boolean;
+  can_stop: boolean;
+}
+
+export interface AgentTeamsSnapshot {
+  updated_at: string;
+  teams: AgentTeam[];
+}
+
+export function getAgentTeams(): Promise<AgentTeamsSnapshot> {
+  return call<AgentTeamsSnapshot>('GET', '/api/agent-teams');
+}
+
+export function setAgentTeamLabel(
+  team: Pick<AgentTeam, 'id' | 'cli' | 'started_at'>,
+  label: string,
+): Promise<{ ok: true }> {
+  return call('POST', '/api/agent/team-label', {
+    id: team.id,
+    label,
+    cli: team.cli,
+    started_at: team.started_at,
+  });
+}
+
+export interface SpawnResult {
+  ok: true;
+  team_id: string;
+  session: string;
+  already_spawned: boolean;
+  linked: AgentTeamLink | null;
+}
+
+export function spawnAgent(input: {
+  repo: string;
+  number: number;
+  kind: 'pr' | 'issue';
+  url: string;
+}): Promise<SpawnResult> {
+  return call<SpawnResult>('POST', '/api/agent/spawn', input);
 }
 
 export function approve(

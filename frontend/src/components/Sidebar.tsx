@@ -40,17 +40,28 @@ export function Sidebar({ route, onNavigate }: Props) {
                  flex-shrink-0 bg-bg-sidebar border-r border-border-base
                  flex flex-col`}
     >
-      {/* Logo / brand */}
-      <div className="h-14 flex items-center px-3 border-b border-border-base">
+      {/* Logo / brand + 折叠按钮 */}
+      <div className="h-14 flex items-center px-3 border-b border-border-base gap-2">
         <div className="w-8 h-8 rounded-md bg-accent-primary/15 text-accent-primary
-                        flex items-center justify-center text-sm font-semibold">
+                        flex items-center justify-center text-sm font-semibold flex-shrink-0">
           AC
         </div>
         {!collapsed && (
-          <div className="ml-3 text-sm text-fg-primary font-medium truncate">
+          <div className="ml-1 text-sm text-fg-primary font-medium truncate flex-1">
             agent-court
           </div>
         )}
+        <button
+          type="button"
+          onClick={() => setCollapsed((c) => !c)}
+          title={collapsed ? t('sidebar.expand') : t('sidebar.collapse')}
+          aria-label={collapsed ? t('sidebar.expand') : t('sidebar.collapse')}
+          className="w-6 h-6 inline-flex items-center justify-center rounded-md
+                     text-fg-muted hover:text-fg-primary hover:bg-bg-card-hover
+                     transition flex-shrink-0"
+        >
+          {collapsed ? <ChevronRight className="w-3.5 h-3.5" /> : <ChevronLeft className="w-3.5 h-3.5" />}
+        </button>
       </div>
 
       {/* Menu */}
@@ -84,25 +95,14 @@ export function Sidebar({ route, onNavigate }: Props) {
         })}
       </nav>
 
-      {/* Collapse toggle */}
-      <div className="p-2 border-t border-border-base">
-        <button
-          type="button"
-          onClick={() => setCollapsed((c) => !c)}
-          title={collapsed ? t('sidebar.expand') : t('sidebar.collapse')}
-          aria-label={collapsed ? t('sidebar.expand') : t('sidebar.collapse')}
-          className="w-full flex items-center justify-center rounded-md py-1.5
-                     text-fg-muted hover:text-fg-primary hover:bg-bg-card-hover
-                     transition"
-        >
-          {collapsed ? <ChevronRight className="w-4 h-4" /> : <ChevronLeft className="w-4 h-4" />}
-        </button>
-        {!collapsed && (
-          <div className="text-[10px] text-fg-muted text-center mt-2 px-2 truncate">
+      {/* Footer */}
+      {!collapsed && (
+        <div className="p-3 border-t border-border-base">
+          <div className="text-[10px] text-fg-muted text-center px-2 truncate">
             {t('sidebar.footer')}
           </div>
-        )}
-      </div>
+        </div>
+      )}
     </aside>
   );
 }

@@ -7,7 +7,7 @@ interface Props {
 }
 
 const SCOPES: GitBoardScope[] = [
-  'related', 'created', 'assigned', 'review', 'participating', 'all',
+  'all', 'created', 'assigned', 'review', 'participating', 'related',
 ];
 
 export function ScopeTabs({ active, onChange }: Props) {

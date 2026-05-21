@@ -54,18 +54,41 @@
       "open": "open",
       "wip": "草稿",
       "review": "待评审",
-      "spawn_agent": "派 Agent 处理"
+      "spawn_agent": "派 Agent",
+      "linked_to_team": "已派给 {{team}}",
+      "spawn_pending": "派单中...",
+      "spawn_error": "派 Agent 失败: {{detail}}",
+      "spawn_success": "已派给 Agent {{team}}",
+      "spawn_already": "已经派过, 跳到对应 Agent"
     },
     "issues_section": "Issues",
     "no_pr": "暂无 PR",
     "no_issues": "暂无 Issue",
     "stale_tag": "数据过期",
     "fetch_error": "拉取 Gitea 失败: {{detail}}",
-    "spawn_agent_toast": "派 Agent 功能 PR-17 上线"
+    "spawn_agent_toast": "派 Agent 功能 PR-17b 上线"
   },
   "agents": {
-    "placeholder_title": "Agent 团队",
-    "placeholder_desc": "可视化所有 ghostty / tmux 里跑着的 agent 团队, 支持启动新 agent + 实时查看输出. PR-17 上线."
+    "title_count": "正在跑的 agent",
+    "subtitle": "聚合 ghostty 终端里的 claude/codex 进程 + 后端起的 tmux session. PR-17b 加 spawn / kill, PR-17c 加实时输出.",
+    "card": {
+      "kind_ghostty": "本地终端",
+      "kind_tmux": "Dashboard 启动",
+      "started_at": "启动",
+      "pid_short": "PID",
+      "session_short": "Session",
+      "windows": "{{count}} 窗口",
+      "subprocs": "MCP 子进程",
+      "no_subprocs": "无",
+      "label_placeholder": "贴个业务标签",
+      "label_edit": "改标签",
+      "label_save": "保存",
+      "label_cancel": "取消",
+      "label_saved": "标签已保存",
+      "linked_target": "在处理 {{repo}}#{{number}}"
+    },
+    "empty": "目前没有跑着的 agent. 在 ghostty 里手动开 claude 后, 几秒内会自动出现.",
+    "fetch_error": "拉取 agent 列表失败: {{detail}}"
   },
   "court_runtime": {
     "subtitle": "现有 dashboard 收纳到此菜单. Orchestrator 健康 / 待审批 / Watcher / Receiver / Tmux 都在."
