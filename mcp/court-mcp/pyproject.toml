@@ -44,4 +44,6 @@ py-modules = [
   "orchestrator",
   "court_reconcile_cli",
   "workspace_manager",
+  "github_client",
+  "tracker_factory",
 ]

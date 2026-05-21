@@ -239,3 +239,75 @@ async def test_malformed_json_body_acked_200(tmp_path):
         # 内部错误 200 ack, 不让 Gitea 重试
         assert resp.status == 200
     assert not list((tmp_path / "pending-webhook").glob("*.json"))
+
+
+# ---------------------------------------------------------------------------
+# BOOT-1 #20: GitHub webhook 格式兼容
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_github_webhook_with_sha256_prefix_is_accepted(tmp_path):
+    """GitHub 用 X-Hub-Signature-256: sha256=<hex>, 应跟 Gitea 一样通过校验."""
+    app = create_app(state_dir=tmp_path, secret=SECRET, allowed_users=None)
+    body = json.dumps({
+        "action": "opened",
+        "issue": {"number": 7, "assignees": [{"login": "alice"}]},
+        "repository": {"full_name": "AITCX08/agent-court"},
+        "sender": {"login": "alice"},
+    }).encode("utf-8")
+    headers = {
+        "X-GitHub-Event": "issues",
+        "X-Hub-Signature-256": f"sha256={_sign(body)}",
+        "X-GitHub-Delivery": "github-uuid-abc",
+        "Content-Type": "application/json",
+    }
+    async with TestClient(TestServer(app)) as client:
+        resp = await client.post("/gitea/webhook", data=body, headers=headers)
+        assert resp.status == 200
+        data = await resp.json()
+        assert data.get("ok") is True
+        assert data.get("delivery") == "github-uuid-abc"
+    files = list((tmp_path / "pending-webhook").glob("*.json"))
+    assert len(files) == 1
+    payload = json.loads(files[0].read_text())
+    assert payload["delivery"] == "github-uuid-abc"
+    assert payload["event"] == "issues"
+    assert payload["action"] == "opened"
+
+
+@pytest.mark.asyncio
+async def test_github_webhook_with_wrong_signature_dropped(tmp_path):
+    app = create_app(state_dir=tmp_path, secret=SECRET, allowed_users=None)
+    body = json.dumps({"action": "opened", "issue": {"number": 1}}).encode("utf-8")
+    headers = {
+        "X-GitHub-Event": "issues",
+        "X-Hub-Signature-256": "sha256=" + ("deadbeef" * 8),  # 假签名 64 hex
+        "X-GitHub-Delivery": "github-uuid-bad",
+        "Content-Type": "application/json",
+    }
+    async with TestClient(TestServer(app)) as client:
+        resp = await client.post("/gitea/webhook", data=body, headers=headers)
+        # ack 200 防止 GitHub 重试风暴
+        assert resp.status == 200
+        text = await resp.text()
+        assert "invalid-signature" in text
+    # 不应该落盘
+    assert not list((tmp_path / "pending-webhook").glob("*.json"))
+
+
+def test_verify_signature_accepts_both_formats():
+    """_verify_signature 单测: Gitea 裸 hex + GitHub sha256= 前缀都过, 大小写都接."""
+    from gitea_webhook_receiver import _verify_signature
+    body = b'{"action":"opened"}'
+    expected = hmac.new(SECRET.encode(), body, sha256).hexdigest()
+    # Gitea 裸 hex
+    assert _verify_signature(SECRET, body, expected) is True
+    # GitHub sha256= 前缀
+    assert _verify_signature(SECRET, body, f"sha256={expected}") is True
+    # 大写 SHA256= 也接 (HTTP header case-insensitive 习惯)
+    assert _verify_signature(SECRET, body, f"SHA256={expected}") is True
+    # 错签拒绝
+    assert _verify_signature(SECRET, body, "deadbeef" * 8) is False
+    assert _verify_signature(SECRET, body, f"sha256={'0'*64}") is False
+    # 空 header 拒绝
+    assert _verify_signature(SECRET, body, "") is False
