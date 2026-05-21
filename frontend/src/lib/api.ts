@@ -101,7 +101,7 @@ function authHeaders(): HeadersInit {
 }
 
 async function call<T>(
-  method: 'GET' | 'POST',
+  method: 'GET' | 'POST' | 'DELETE',
   path: string,
   body?: Record<string, unknown>
 ): Promise<T> {
@@ -247,6 +247,10 @@ export function spawnAgent(input: {
   url: string;
 }): Promise<SpawnResult> {
   return call<SpawnResult>('POST', '/api/agent/spawn', input);
+}
+
+export function killAgent(teamId: string): Promise<{ ok: true; team_id: string; session: string }> {
+  return call('DELETE', `/api/agent/${encodeURIComponent(teamId)}`, { confirm: true });
 }
 
 export function approve(

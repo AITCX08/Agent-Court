@@ -1,14 +1,16 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { AlertTriangle, RefreshCw, Loader2, Bot } from 'lucide-react';
-import { getAgentTeams, type AgentTeamsSnapshot } from '../../lib/api';
+import { getAgentTeams } from '../../lib/api';
+import { useStore } from '../../lib/store';
 import { AgentTeamCard } from '../agents/AgentTeamCard';
 
 const AUTO_REFRESH_MS = 5_000;
 
 export function AgentsPage() {
   const { t } = useTranslation();
-  const [snap, setSnap] = useState<AgentTeamsSnapshot | null>(null);
+  const snap = useStore((s) => s.agentTeams);
+  const setAgentTeams = useStore((s) => s.setAgentTeams);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -17,13 +19,13 @@ export function AgentsPage() {
     setError(null);
     try {
       const data = await getAgentTeams();
-      setSnap(data);
+      setAgentTeams(data);
     } catch (err) {
       setError((err as Error).message);
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [setAgentTeams]);
 
   useEffect(() => {
     fetch();
@@ -89,7 +91,7 @@ export function AgentsPage() {
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
           {teams.map((team) => (
-            <AgentTeamCard key={team.id} team={team} onLabelSaved={fetch} />
+            <AgentTeamCard key={team.id} team={team} onLabelSaved={fetch} onTeamKilled={fetch} />
           ))}
         </div>
       )}

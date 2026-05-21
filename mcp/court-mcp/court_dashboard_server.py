@@ -88,6 +88,7 @@ def create_app(
     app.router.add_get("/api/agent-teams", handle_agent_teams)
     app.router.add_post("/api/agent/team-label", handle_agent_team_label)
     app.router.add_post("/api/agent/spawn", handle_agent_spawn)
+    app.router.add_delete("/api/agent/{team_id}", handle_agent_kill)
     app.router.add_get("/api/events", handle_events)
     app.router.add_post("/api/approve", handle_approve)
     app.router.add_post("/api/reject", handle_reject)
@@ -318,6 +319,24 @@ async def handle_agent_spawn(request: web.Request) -> web.Response:
     # spawn 后 git-board cache 可能过期 (linked_team 字段会变), 让前端 refresh 取最新
     request.app["git_board"].invalidate()
     return web.json_response({"ok": True, **result})
+
+
+async def handle_agent_kill(request: web.Request) -> web.Response:
+    team_id = request.match_info.get("team_id", "")
+    # body must have confirm: true
+    body = await _read_json(request) or {}
+    if body.get("confirm") is not True:
+        return web.json_response({"error": "confirm_required"}, status=400)
+    spawner: AgentSpawner = request.app["agent_spawner"]
+    try:
+        result = await asyncio.to_thread(spawner.kill, team_id)
+    except ValueError as exc:
+        return web.json_response({"error": "invalid_team_id", "detail": str(exc)}, status=400)
+    except SpawnError as exc:
+        return web.json_response({"error": "kill_failed", "detail": str(exc)}, status=500)
+    # invalidate git_board cache so linked_team disappears
+    request.app["git_board"].invalidate()
+    return web.json_response(result)
 
 
 # ---------------------------------------------------------------------------

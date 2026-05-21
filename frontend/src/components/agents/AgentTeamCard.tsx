@@ -1,13 +1,14 @@
 import { useState } from 'react';
-import { Terminal, ServerCog, Pencil, Check, X, Cpu, ExternalLink } from 'lucide-react';
+import { Terminal, ServerCog, Pencil, Check, X, Cpu, ExternalLink, Square } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import type { AgentTeam } from '../../lib/api';
-import { setAgentTeamLabel } from '../../lib/api';
+import { setAgentTeamLabel, killAgent } from '../../lib/api';
 import { useToast } from '../Toast';
 
 interface Props {
   team: AgentTeam;
   onLabelSaved?: () => void;
+  onTeamKilled?: () => void;
 }
 
 function formatStartedAt(iso: string): string {
@@ -18,12 +19,14 @@ function formatStartedAt(iso: string): string {
   return d.toLocaleString(undefined, { hour12: false });
 }
 
-export function AgentTeamCard({ team, onLabelSaved }: Props) {
+export function AgentTeamCard({ team, onLabelSaved, onTeamKilled }: Props) {
   const { t } = useTranslation();
   const { push } = useToast();
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(team.label);
   const [saving, setSaving] = useState(false);
+  const [confirmingStop, setConfirmingStop] = useState(false);
+  const [stopping, setStopping] = useState(false);
 
   const isGhostty = team.kind === 'ghostty';
   const KindIcon = isGhostty ? Terminal : ServerCog;
@@ -37,6 +40,20 @@ export function AgentTeamCard({ team, onLabelSaved }: Props) {
   const cancelEdit = () => {
     setEditing(false);
     setDraft(team.label);
+  };
+
+  const doStop = async () => {
+    setStopping(true);
+    try {
+      await killAgent(team.id);
+      push({ kind: 'ok', text: t('agents.card.stop_success') });
+      setConfirmingStop(false);
+      onTeamKilled?.();
+    } catch (err) {
+      push({ kind: 'err', text: t('agents.card.stop_error', { detail: (err as Error).message }) });
+    } finally {
+      setStopping(false);
+    }
   };
 
   const save = async () => {
@@ -196,6 +213,56 @@ export function AgentTeamCard({ team, onLabelSaved }: Props) {
           )}
         </div>
       )}
+
+      {/* Stop button (tmux) or hint (ghostty) */}
+      <div className="pt-2 mt-1 border-t border-border-base/50 flex justify-end">
+        {team.kind === 'tmux' ? (
+          confirmingStop ? (
+            <div className="flex items-center gap-2">
+              <span className="text-[11px] text-fg-secondary">{t('agents.card.stop_confirm_title')}</span>
+              <button
+                type="button"
+                onClick={doStop}
+                disabled={stopping}
+                className="text-[11px] px-2 py-1 rounded
+                           bg-accent-danger/15 text-accent-danger border border-accent-danger/30
+                           hover:bg-accent-danger/25 transition disabled:opacity-40
+                           inline-flex items-center gap-1"
+              >
+                <Square className="w-3 h-3" />
+                {t('agents.card.stop_confirm_yes')}
+              </button>
+              <button
+                type="button"
+                onClick={() => setConfirmingStop(false)}
+                disabled={stopping}
+                className="text-[11px] px-2 py-1 rounded text-fg-muted
+                           hover:bg-bg-card-hover transition disabled:opacity-40"
+              >
+                {t('agents.card.stop_confirm_no')}
+              </button>
+            </div>
+          ) : (
+            <button
+              type="button"
+              onClick={() => setConfirmingStop(true)}
+              title={t('agents.card.stop')}
+              aria-label={t('agents.card.stop')}
+              className="text-[11px] px-2 py-1 rounded
+                         text-fg-muted hover:text-accent-danger
+                         hover:bg-accent-danger/10 transition
+                         inline-flex items-center gap-1"
+            >
+              <Square className="w-3 h-3" />
+              {t('agents.card.stop')}
+            </button>
+          )
+        ) : (
+          <span className="text-[10px] text-fg-muted italic">
+            {t('agents.card.stop_ghostty_hint')}
+          </span>
+        )}
+      </div>
     </div>
   );
 }
