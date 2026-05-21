@@ -85,7 +85,15 @@
       "label_save": "保存",
       "label_cancel": "取消",
       "label_saved": "标签已保存",
-      "linked_target": "在处理 {{repo}}#{{number}}"
+      "linked_target": "在处理 {{repo}}#{{number}}",
+      "stop": "终止",
+      "stop_ghostty_hint": "在 ghostty 终端窗口里 Cmd+W 关闭",
+      "stop_confirm_title": "终止 Agent?",
+      "stop_confirm_body": "这会 kill 后端 tmux session, 跑着的 claude / 任务会立刻丢失. 已派过的 PR/issue 链接也会清掉. 确认?",
+      "stop_confirm_yes": "终止",
+      "stop_confirm_no": "取消",
+      "stop_success": "已终止 Agent",
+      "stop_error": "终止失败: {{detail}}"
     },
     "empty": "目前没有跑着的 agent. 在 ghostty 里手动开 claude 后, 几秒内会自动出现.",
     "fetch_error": "拉取 agent 列表失败: {{detail}}"

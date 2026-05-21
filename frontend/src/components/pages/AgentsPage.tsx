@@ -89,7 +89,7 @@ export function AgentsPage() {
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
           {teams.map((team) => (
-            <AgentTeamCard key={team.id} team={team} onLabelSaved={fetch} />
+            <AgentTeamCard key={team.id} team={team} onLabelSaved={fetch} onTeamKilled={fetch} />
           ))}
         </div>
       )}

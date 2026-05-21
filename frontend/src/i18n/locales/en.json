@@ -85,7 +85,15 @@
       "label_save": "Save",
       "label_cancel": "Cancel",
       "label_saved": "Label saved",
-      "linked_target": "Working on {{repo}}#{{number}}"
+      "linked_target": "Working on {{repo}}#{{number}}",
+      "stop": "Stop",
+      "stop_ghostty_hint": "Close in the ghostty terminal window (Cmd+W)",
+      "stop_confirm_title": "Stop this agent?",
+      "stop_confirm_body": "This kills the backend tmux session — any running claude / task is lost. The linked PR/issue connection is removed too. Confirm?",
+      "stop_confirm_yes": "Stop",
+      "stop_confirm_no": "Cancel",
+      "stop_success": "Agent stopped",
+      "stop_error": "Stop failed: {{detail}}"
     },
     "empty": "No agents running. Open claude in a ghostty tab and it appears within seconds.",
     "fetch_error": "Failed to load agents: {{detail}}"
