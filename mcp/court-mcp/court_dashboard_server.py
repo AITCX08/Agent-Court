@@ -54,13 +54,14 @@ def create_app(
     if not token:
         raise ValueError("token must be non-empty")
 
-    aggregator = DashboardAggregator(state_dir=state_dir)
     resolved_state_dir = state_dir or default_state_dir()
+    orchestrator = Orchestrator(court_root=resolved_state_dir.parent)
+    aggregator = DashboardAggregator(state_dir=state_dir, orchestrator=orchestrator)
     app = web.Application(middlewares=[_token_middleware(token)])
     app["token"] = token
     app["aggregator"] = aggregator
     app["state_dir"] = resolved_state_dir
-    app["orchestrator"] = Orchestrator(court_root=resolved_state_dir.parent)
+    app["orchestrator"] = orchestrator
     app["frontend_dist"] = frontend_dist or _default_frontend_dist()
     app["fs_watcher_enabled"] = fs_watcher_enabled
     app["fs_watcher"] = None
@@ -154,7 +155,21 @@ def _is_browser_index(request: web.Request) -> bool:
 
 
 def _render_unauthorized_index() -> web.Response:
+    # SY-3 v2 修: 顶层导航不会带 localStorage 里的 token (PR-15 原 UX bug —
+    # 首访剥掉 ?t= 后刷新就 401). 这里塞段 JS, localStorage 有 token 时
+    # 自动重定向回 ?t=<token>; 没 token 才显示静态提示页.
     html = """<!doctype html><html><head><meta charset="utf-8"><title>court-dashboard</title>
+<script>(function(){
+  try {
+    var t = localStorage.getItem('court-dashboard-token');
+    if (t) {
+      var u = new URL(window.location.href);
+      u.searchParams.set('t', t);
+      window.location.replace(u.toString());
+      return;
+    }
+  } catch (_) {}
+})();</script>
 <style>body{font:14px ui-sans-serif,system-ui;background:#0b0d10;color:#cdd6dd;padding:48px;}
 code{background:#1a1f25;color:#a5d4ff;padding:2px 6px;border-radius:4px;}
 .box{max-width:560px;border:1px solid #2a3239;padding:24px;border-radius:8px;background:#10141a;}

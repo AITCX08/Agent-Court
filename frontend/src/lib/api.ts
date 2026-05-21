@@ -36,6 +36,37 @@ export interface Pending {
   channels: string[];
 }
 
+export interface OrchestratorRun {
+  issue_key: string;
+  repo: string;
+  number: number;
+  state: string;
+  stage: string;
+  last_action: string;
+  winner: string;
+  tmux_window: string;
+  tmux_window_alive: boolean;
+  has_pending_approval: boolean;
+  in_retry_queue: boolean;
+  retry_attempt: number;
+  dispatched_at: string;
+}
+
+export interface OrchestratorInconsistency {
+  issue_key: string;
+  kind: string;
+  severity: 'warn' | 'error';
+  detail: string;
+  suggested_fix: string;
+}
+
+export interface OrchestratorView {
+  runs: OrchestratorRun[];
+  inconsistencies: OrchestratorInconsistency[];
+  metrics: Record<string, number>;
+  orphan_tmux_windows: string[];
+}
+
 export interface Status {
   courts: Court[];
   tmux_sessions: TmuxSession[];
@@ -43,6 +74,9 @@ export interface Status {
   seen_issues_count: number;
   watcher: ProcessInfo;
   receiver: ProcessInfo;
+  // SY-3 v2 渐进切换: 后端开始把 orchestrator 统一视图塞 /api/status;
+  // 老字段保持不变, 此字段可选, 老前端忽略也兼容.
+  orchestrator?: OrchestratorView;
   ts: number;
 }
 
