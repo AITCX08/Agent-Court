@@ -45,7 +45,7 @@ class AgentSpawner:
 
         existing = self.team_links.lookup_by_target(kind, repo, number)
         if existing:
-            record = self.team_links.lookup_by_team(existing) or {}
+            record = self.team_links.lookup_by_team(existing)
             return {
                 "team_id": existing,
                 "session": existing,

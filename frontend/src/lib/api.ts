@@ -237,7 +237,7 @@ export interface SpawnResult {
   team_id: string;
   session: string;
   already_spawned: boolean;
-  linked: AgentTeamLink;
+  linked: AgentTeamLink | null;
 }
 
 export function spawnAgent(input: {
