@@ -43,4 +43,5 @@ py-modules = [
   "workflow_loader",
   "orchestrator",
   "court_reconcile_cli",
+  "workspace_manager",
 ]

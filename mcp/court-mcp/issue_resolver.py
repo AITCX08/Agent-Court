@@ -28,6 +28,8 @@ def report_back(repo: str, num: int, summary: str, stage: str = "done", *, comme
     """更新 seen-issues.json 状态. stage=executing|done.
 
     done 时若 comment=True 会调 GiteaClient 在 issue 上发完成汇报评论.
+    SY-2 #19: done 时若 WORKFLOW.md 是 working_dir_strategy=worktree, 自动
+    cleanup 该 issue 的 worktree (释放 ~/.agent-court/worktrees/<safe_key>/).
     """
     if stage not in {"executing", "done"}:
         return {"ok": False, "reason": f"unsupported stage: {stage!r}"}
@@ -42,6 +44,8 @@ def report_back(repo: str, num: int, summary: str, stage: str = "done", *, comme
     if not entry:
         return {"ok": False, "reason": "issue missing in seen-issues.json"}
 
+    result: dict[str, Any] = {"ok": True}
+
     if stage == "done" and comment:
         try:
             from gitea_client import GiteaClient
@@ -50,9 +54,47 @@ def report_back(repo: str, num: int, summary: str, stage: str = "done", *, comme
             body = f"## ✅ dashboard 处理完成\n\nwinner: {winner}\n\n{summary}"
             GiteaClient().comment_on_issue(repo, num, body)
         except Exception as exc:  # pragma: no cover - defensive
-            return {"ok": True, "comment": False, "comment_error": str(exc)}
+            result["comment"] = False
+            result["comment_error"] = str(exc)
 
-    return {"ok": True}
+    if stage == "done":
+        worktree_cleaned = _cleanup_worktree_if_configured(repo, num)
+        if worktree_cleaned is not None:
+            result["worktree_cleaned"] = worktree_cleaned
+
+    return result
+
+
+def _cleanup_worktree_if_configured(repo: str, num: int) -> bool | None:
+    """SY-2 #19: 完成时清掉本 issue 的 git worktree (如果用了 worktree 策略).
+
+    返回:
+    - True: 真的清了 worktree
+    - False: 配置了 worktree 但 cleanup 时已不存在 (上次清过 / 没创建)
+    - None: WORKFLOW.md 没配 worktree 策略 (inplace 模式) / 模块缺失 / 推断失败
+    """
+    try:
+        from workflow_loader import load_workflow
+        from workspace_manager import WorkspaceManager
+    except ImportError:
+        return None
+    repo_root = Path(__file__).resolve().parents[2]
+    try:
+        wf = load_workflow(repo_root)
+    except Exception:
+        return None
+    if wf.config.working_dir_strategy != "worktree":
+        return None
+    repo_name = repo.split("/", 1)[1] if "/" in repo else repo
+    source_repo = Path.home() / "Desktop" / "K2Work" / repo_name
+    if not source_repo.is_dir():
+        return None
+    try:
+        return WorkspaceManager(branch_prefix=wf.config.branch_prefix).cleanup_worktree(
+            source_repo, f"{repo}#{num}"
+        )
+    except Exception:  # pragma: no cover - defensive
+        return None
 
 
 def main(argv: list[str] | None = None) -> int:
