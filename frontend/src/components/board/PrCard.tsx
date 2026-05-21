@@ -53,6 +53,7 @@ export function PrCard({ card, onSpawnRequest, onJumpToTeam }: Props) {
               onJumpToTeam?.(card.linked_team!);
             }}
             title={t('git_board.card.linked_to_team', { team: card.linked_team })}
+            aria-label={t('git_board.card.linked_to_team', { team: card.linked_team })}
             className="text-[10px] px-1.5 py-0.5 rounded
                        bg-accent-purple/15 text-accent-purple border border-accent-purple/30
                        hover:bg-accent-purple/25 transition flex-shrink-0

@@ -73,10 +73,10 @@ export function GitBoardPage() {
       });
       if (result.already_spawned) {
         push({ kind: 'ok', text: t('git_board.card.spawn_already') });
-      } else {
-        push({ kind: 'ok', text: t('git_board.card.spawn_success', { team: result.team_id }) });
+        return;
       }
-      // refresh so linked_team field gets populated
+      push({ kind: 'ok', text: t('git_board.card.spawn_success', { team: result.team_id }) });
+      // new spawn → linked_team will appear on next snapshot, refresh to pull it
       await refreshGitBoard(scope);
       await fetch(scope);
     } catch (err) {

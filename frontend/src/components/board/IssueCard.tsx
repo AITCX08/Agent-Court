@@ -37,6 +37,7 @@ export function IssueCard({ card, onSpawnRequest, onJumpToTeam }: Props) {
             type="button"
             onClick={() => onJumpToTeam?.(card.linked_team!)}
             title={t('git_board.card.linked_to_team', { team: card.linked_team })}
+            aria-label={t('git_board.card.linked_to_team', { team: card.linked_team })}
             className="text-[10px] px-1.5 py-0.5 rounded
                        bg-accent-purple/15 text-accent-purple border border-accent-purple/30
                        hover:bg-accent-purple/25 transition flex-shrink-0
@@ -49,6 +50,7 @@ export function IssueCard({ card, onSpawnRequest, onJumpToTeam }: Props) {
             type="button"
             onClick={() => onSpawnRequest(card)}
             title={t('git_board.card.spawn_agent')}
+            aria-label={t('git_board.card.spawn_agent')}
             className="text-[10px] px-1.5 py-0.5 rounded
                        bg-accent-primary/10 text-accent-primary border border-accent-primary/30
                        hover:bg-accent-primary/20 transition flex-shrink-0
