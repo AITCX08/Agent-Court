@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Terminal, ServerCog, Pencil, Check, X, Cpu } from 'lucide-react';
+import { Terminal, ServerCog, Pencil, Check, X, Cpu, ExternalLink } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import type { AgentTeam } from '../../lib/api';
 import { setAgentTeamLabel } from '../../lib/api';
@@ -131,6 +131,21 @@ export function AgentTeamCard({ team, onLabelSaved }: Props) {
             </span>
             <span>{team.cli}</span>
           </div>
+          {team.linked && (
+            <a
+              href={team.linked.url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-[11px] text-accent-primary hover:underline
+                         flex items-center gap-1 mt-1"
+            >
+              <ExternalLink className="w-3 h-3" />
+              {t('agents.card.linked_target', {
+                repo: team.linked.repo,
+                number: team.linked.number,
+              })}
+            </a>
+          )}
         </div>
       </div>
 
