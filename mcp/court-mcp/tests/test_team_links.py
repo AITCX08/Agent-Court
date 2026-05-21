@@ -58,3 +58,27 @@ def test_corrupt_file_treated_as_empty(tmp_path):
     (tmp_path / "team-links.json").write_text("not json")
     links = tl.TeamLinks(court_root=tmp_path)
     assert links.list_by_team() == {}
+
+
+def test_set_link_overwrite_clears_old_target(tmp_path):
+    """重新分配同一 team_id 到新 target 时, 旧 by_target 条目应被清理 (防僵尸)."""
+    links = tl.TeamLinks(court_root=tmp_path)
+    links.set_link("agent-team-t1", "K2Lab/foo", 100, "pr", "url1")
+    links.set_link("agent-team-t1", "K2Lab/foo", 200, "pr", "url2")
+    assert links.lookup_by_target("pr", "K2Lab/foo", 100) is None
+    assert links.lookup_by_target("pr", "K2Lab/foo", 200) == "agent-team-t1"
+    # by_team 也应反映最新 target
+    assert links.lookup_by_team("agent-team-t1") == {
+        "repo": "K2Lab/foo", "number": 200, "kind": "pr", "url": "url2",
+    }
+
+
+def test_remove_link_nonexistent_no_disk_write(tmp_path):
+    """remove_link 对不存在的 team_id 不应触发不必要的磁盘写入."""
+    links = tl.TeamLinks(court_root=tmp_path)
+    # 还没 set 任何东西, links 文件应不存在
+    path = tmp_path / "team-links.json"
+    assert not path.exists()
+    links.remove_link("agent-team-never-existed")
+    # remove_link 不该建文件
+    assert not path.exists()

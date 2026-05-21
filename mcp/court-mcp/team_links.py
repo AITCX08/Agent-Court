@@ -61,14 +61,18 @@ class TeamLinks:
         tmp.replace(path)
 
     def set_link(self, team_id: str, repo: str, number: int, kind: str, url: str) -> None:
+        old = self._by_team.get(team_id)
+        if old is not None:
+            self._by_target.pop(_target_key(old["kind"], old["repo"], old["number"]), None)
         self._by_team[team_id] = {"repo": repo, "number": number, "kind": kind, "url": url}
         self._by_target[_target_key(kind, repo, number)] = team_id
         self._save()
 
     def remove_link(self, team_id: str) -> None:
         record = self._by_team.pop(team_id, None)
-        if record is not None:
-            self._by_target.pop(_target_key(record["kind"], record["repo"], record["number"]), None)
+        if record is None:
+            return
+        self._by_target.pop(_target_key(record["kind"], record["repo"], record["number"]), None)
         self._save()
 
     def lookup_by_team(self, team_id: str) -> dict[str, Any] | None:
