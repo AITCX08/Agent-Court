@@ -71,6 +71,7 @@ class BoardCard:
     color_bar: str = "gray"                          # purple / orange / blue / gray
     url: str = ""
     updated_at: str = ""
+    linked_team: str | None = None  # team_id or None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -83,15 +84,22 @@ class BoardCard:
             "color_bar": self.color_bar,
             "url": self.url,
             "updated_at": self.updated_at,
+            "linked_team": self.linked_team,
         }
 
 
 class GitBoardAggregator:
     """每个 scope 一份 cache. 同一个 scope 30s 内重复请求走 cache."""
 
-    def __init__(self, client: GiteaClient | None = None, *, ttl: float = CACHE_TTL_SECONDS) -> None:
+    def __init__(self, client: GiteaClient | None = None, *,
+                 ttl: float = CACHE_TTL_SECONDS,
+                 team_links: "TeamLinks | None" = None) -> None:
         self._client = client or GiteaClient()
         self._ttl = ttl
+        if team_links is None:
+            from team_links import TeamLinks
+            team_links = TeamLinks()
+        self._team_links = team_links
         self._cache: dict[str, tuple[float, dict[str, Any]]] = {}
         self._last_error: dict[str, str] = {}
         self._lock = asyncio.Lock()
@@ -138,6 +146,11 @@ class GitBoardAggregator:
         pulls_closed = self._client.search_issues({**params_base, "type": "pulls", "state": "closed"})
         issues_open = self._client.search_issues({**params_base, "type": "issues", "state": "open"})
 
+        def _attach_link(card_dict: dict[str, Any], kind: str) -> None:
+            team_id = self._team_links.lookup_by_target(kind, card_dict["repo"], card_dict["number"])
+            if team_id:
+                card_dict["linked_team"] = team_id
+
         columns: dict[str, list[dict[str, Any]]] = {
             "wip": [],
             "under_review": [],
@@ -157,14 +170,17 @@ class GitBoardAggregator:
             if column == "wip":
                 card_dict = card.to_dict()
                 card_dict["color_bar"] = "gray"
+                _attach_link(card_dict, "pr")
                 columns["wip"].append(card_dict)
             elif column == "under_review":
                 card_dict = card.to_dict()
                 card_dict["color_bar"] = "blue"
+                _attach_link(card_dict, "pr")
                 columns["under_review"].append(card_dict)
             elif column == "reviewing":
                 card_dict = card.to_dict()
                 card_dict["color_bar"] = "purple"
+                _attach_link(card_dict, "pr")
                 columns["reviewing"].append(card_dict)
 
         for pr in pulls_closed:
@@ -179,6 +195,7 @@ class GitBoardAggregator:
             seen_pr_keys.add(key)
             card_dict = card.to_dict()
             card_dict["color_bar"] = "orange"
+            _attach_link(card_dict, "pr")
             columns["reviewed"].append(card_dict)
 
         issues_row: list[dict[str, Any]] = []
@@ -193,6 +210,7 @@ class GitBoardAggregator:
             seen_issue_keys.add(key)
             card_dict = card.to_dict()
             card_dict["color_bar"] = "blue"
+            _attach_link(card_dict, "issue")
             issues_row.append(card_dict)
 
         return {

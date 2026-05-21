@@ -231,3 +231,39 @@ async def test_dedup_pr_across_state_queries():
     all_cards = sum((board["columns"][k] for k in ("wip", "under_review", "reviewing", "reviewed")), [])
     assert len(all_cards) == 1
     assert all_cards[0]["state"] == "open"
+
+
+@pytest.mark.asyncio
+async def test_card_includes_linked_team_id(tmp_path):
+    import team_links as tl
+    links = tl.TeamLinks(court_root=tmp_path)
+    links.set_link("agent-team-xyz", "K2Lab/a", 1, "pr", "https://x/")
+
+    client = MagicMock()
+
+    def fake_search(params):
+        if params.get("type") == "pulls" and params.get("state") == "open":
+            return [_fake_pr("K2Lab/a", 1, title="hello")]
+        return []
+
+    client.search_issues.side_effect = fake_search
+    agg = gb.GitBoardAggregator(client=client, team_links=links)
+    board = await agg.get_board("created")
+    assert board["columns"]["reviewing"][0]["linked_team"] == "agent-team-xyz"
+
+
+@pytest.mark.asyncio
+async def test_card_without_link_has_null_linked_team(tmp_path):
+    import team_links as tl
+    links = tl.TeamLinks(court_root=tmp_path)
+    client = MagicMock()
+
+    def fake_search(params):
+        if params.get("type") == "pulls" and params.get("state") == "open":
+            return [_fake_pr("K2Lab/a", 2, title="solo")]
+        return []
+
+    client.search_issues.side_effect = fake_search
+    agg = gb.GitBoardAggregator(client=client, team_links=links)
+    board = await agg.get_board("created")
+    assert board["columns"]["reviewing"][0]["linked_team"] is None
