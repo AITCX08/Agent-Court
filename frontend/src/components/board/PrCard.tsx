@@ -1,11 +1,12 @@
-import { Rocket } from 'lucide-react';
+import { Sparkles, Bot } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { ChipBadge } from './ChipBadge';
 import type { BoardCard } from '../../lib/api';
 
 interface Props {
   card: BoardCard;
-  onSpawn?: (card: BoardCard) => void;
+  onSpawnRequest?: (card: BoardCard) => void;
+  onJumpToTeam?: (teamId: string) => void;
 }
 
 const COLOR_BAR_CLASS: Record<string, string> = {
@@ -15,11 +16,11 @@ const COLOR_BAR_CLASS: Record<string, string> = {
   gray: 'bg-fg-muted',
 };
 
-export function PrCard({ card, onSpawn }: Props) {
+export function PrCard({ card, onSpawnRequest, onJumpToTeam }: Props) {
   const { t } = useTranslation();
   const barCls = COLOR_BAR_CLASS[card.color_bar] || COLOR_BAR_CLASS.gray;
 
-  // 整卡当 <a> — 任何位置点击都跳; 内部 🚀 按钮 stopPropagation+preventDefault
+  // 整卡当 <a> — 任何位置点击都跳; 内部按钮 stopPropagation+preventDefault
   // 防止冒泡触发跳转. <a> 里嵌 <button> 浏览器实测能正常工作 (button 接管点击).
   return (
     <a
@@ -43,22 +44,42 @@ export function PrCard({ card, onSpawn }: Props) {
           <span>·</span>
           <span className="text-accent-primary flex-shrink-0">#{card.number}</span>
         </div>
-        {onSpawn && (
+        {card.linked_team ? (
           <button
             type="button"
             onClick={(e) => {
               e.stopPropagation();
               e.preventDefault();
-              onSpawn(card);
+              onJumpToTeam?.(card.linked_team!);
+            }}
+            title={t('git_board.card.linked_to_team', { team: card.linked_team })}
+            className="text-[10px] px-1.5 py-0.5 rounded
+                       bg-accent-purple/15 text-accent-purple border border-accent-purple/30
+                       hover:bg-accent-purple/25 transition flex-shrink-0
+                       inline-flex items-center gap-1"
+          >
+            <Bot className="w-3 h-3" />
+            <span className="truncate max-w-[100px]">{card.linked_team.replace('agent-team-', '')}</span>
+          </button>
+        ) : onSpawnRequest ? (
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              e.preventDefault();
+              onSpawnRequest(card);
             }}
             title={t('git_board.card.spawn_agent')}
             aria-label={t('git_board.card.spawn_agent')}
-            className="text-fg-muted hover:text-accent-purple transition
-                       flex-shrink-0 w-5 h-5 flex items-center justify-center"
+            className="text-[10px] px-1.5 py-0.5 rounded
+                       bg-accent-primary/10 text-accent-primary border border-accent-primary/30
+                       hover:bg-accent-primary/20 transition flex-shrink-0
+                       inline-flex items-center gap-1"
           >
-            <Rocket className="w-3 h-3" />
+            <Sparkles className="w-3 h-3" />
+            <span>{t('git_board.card.spawn_agent')}</span>
           </button>
-        )}
+        ) : null}
       </div>
 
       {card.tags.length > 0 && (
