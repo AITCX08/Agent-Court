@@ -140,3 +140,47 @@ def test_dataclass_is_frozen(monkeypatch):
 
     with pytest.raises(Exception):  # FrozenInstanceError 或 AttributeError
         cfg.bot_username = "other"  # type: ignore[misc]
+
+
+def test_load_config_watch_repos_rejects_multi_slash(monkeypatch):
+    """foo/bar/baz 不是合法 owner/repo, 必须有且只有一个斜杠分两段."""
+    _clear_a2a_env(monkeypatch)
+    monkeypatch.setenv("A2A_GITEA_USERNAME", "bot")
+    monkeypatch.setenv("A2A_GITEA_WATCH_REPOS", "K2Lab/agent-court,K2Lab/sub/path")
+
+    with pytest.raises(AutoReviewConfigError, match="owner/repo"):
+        load_config()
+
+
+def test_load_config_worker_count_must_be_positive(monkeypatch):
+    """worker_count <= 0 会让 polling worker spawn 0 个进程, 必须 fail-fast."""
+    _clear_a2a_env(monkeypatch)
+    monkeypatch.setenv("A2A_GITEA_USERNAME", "bot")
+    monkeypatch.setenv("A2A_GITEA_WATCH_REPOS", "K2Lab/a")
+    monkeypatch.setenv("A2A_GITEA_WORKER_COUNT", "0")
+
+    with pytest.raises(AutoReviewConfigError, match="A2A_GITEA_WORKER_COUNT.*>= 1"):
+        load_config()
+
+
+def test_load_config_poll_interval_must_be_positive(monkeypatch):
+    """poll 间隔 <= 0 会导致紧循环, 必须 fail-fast."""
+    _clear_a2a_env(monkeypatch)
+    monkeypatch.setenv("A2A_GITEA_USERNAME", "bot")
+    monkeypatch.setenv("A2A_GITEA_WATCH_REPOS", "K2Lab/a")
+    monkeypatch.setenv("A2A_GITEA_POLL_DISCOVERY_SEC", "-5")
+
+    with pytest.raises(AutoReviewConfigError, match="A2A_GITEA_POLL_DISCOVERY_SEC"):
+        load_config()
+
+
+def test_init_module_reexports_public_api():
+    """auto_review 顶层包应当 re-export config 公开 API, 让 from auto_review import X 可用."""
+    import auto_review
+
+    assert hasattr(auto_review, "AutoReviewConfig")
+    assert hasattr(auto_review, "AutoReviewConfigError")
+    assert hasattr(auto_review, "load_config")
+    assert "AutoReviewConfig" in auto_review.__all__
+    assert "AutoReviewConfigError" in auto_review.__all__
+    assert "load_config" in auto_review.__all__

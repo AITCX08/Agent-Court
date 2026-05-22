@@ -5,3 +5,7 @@ KAXY-3022/Agent-manager's A2A runner design. PR-18a establishes the config
 foundation; later PRs add the polling worker (18b), webhook listener (18c),
 light/deep router (18d), and frontend status badges (18e).
 """
+
+from auto_review.config import AutoReviewConfig, AutoReviewConfigError, load_config
+
+__all__ = ["AutoReviewConfig", "AutoReviewConfigError", "load_config"]

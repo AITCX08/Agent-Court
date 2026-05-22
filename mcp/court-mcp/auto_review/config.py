@@ -38,6 +38,16 @@ def _parse_int(name: str, raw: str | None, default: int) -> int:
         raise AutoReviewConfigError(f"{name} must be an integer, got {raw!r}") from exc
 
 
+def _parse_positive_int(name: str, raw: str | None, default: int, min_value: int = 1) -> int:
+    """Parse int env var, enforcing a lower bound (default min=1)."""
+    value = _parse_int(name, raw, default)
+    if value < min_value:
+        raise AutoReviewConfigError(
+            f"{name} must be >= {min_value}, got {value}"
+        )
+    return value
+
+
 def _parse_watch_repos(raw: str | None) -> list[str]:
     if raw is None:
         raise AutoReviewConfigError(
@@ -47,7 +57,8 @@ def _parse_watch_repos(raw: str | None) -> list[str]:
     if not items:
         raise AutoReviewConfigError("A2A_GITEA_WATCH_REPOS is empty after parsing")
     for item in items:
-        if "/" not in item or item.startswith("/") or item.endswith("/"):
+        parts = item.split("/")
+        if len(parts) != 2 or not parts[0] or not parts[1]:
             raise AutoReviewConfigError(
                 f"A2A_GITEA_WATCH_REPOS entry {item!r} is not a valid owner/repo"
             )
@@ -95,21 +106,22 @@ def load_config(env: dict[str, str] | None = None) -> AutoReviewConfig:
         webhook_triggers_enabled=_parse_bool(
             "A2A_GITEA_WEBHOOK_TRIGGERS", e.get("A2A_GITEA_WEBHOOK_TRIGGERS"), False
         ),
-        worker_count=_parse_int(
+        worker_count=_parse_positive_int(
             "A2A_GITEA_WORKER_COUNT", e.get("A2A_GITEA_WORKER_COUNT"), 2
         ),
-        light_deep_threshold=_parse_int(
+        light_deep_threshold=_parse_positive_int(
             "A2A_GITEA_LIGHT_DEEP_THRESHOLD",
             e.get("A2A_GITEA_LIGHT_DEEP_THRESHOLD"),
             10,
+            min_value=0,  # 0 = always deep is allowed
         ),
         gitea_base_url=(e.get("A2A_GITEA_BASE_URL") or "https://git.k2lab.ai").strip(),
-        poll_discovery_interval_sec=_parse_int(
+        poll_discovery_interval_sec=_parse_positive_int(
             "A2A_GITEA_POLL_DISCOVERY_SEC",
             e.get("A2A_GITEA_POLL_DISCOVERY_SEC"),
             60,
         ),
-        poll_active_interval_sec=_parse_int(
+        poll_active_interval_sec=_parse_positive_int(
             "A2A_GITEA_POLL_ACTIVE_SEC", e.get("A2A_GITEA_POLL_ACTIVE_SEC"), 30
         ),
     )
