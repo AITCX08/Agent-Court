@@ -184,3 +184,14 @@ def test_init_module_reexports_public_api():
     assert "AutoReviewConfig" in auto_review.__all__
     assert "AutoReviewConfigError" in auto_review.__all__
     assert "load_config" in auto_review.__all__
+
+
+def test_load_config_webhook_port_default_and_override(monkeypatch):
+    _clear_a2a_env(monkeypatch)
+    monkeypatch.setenv("A2A_GITEA_USERNAME", "bot")
+    monkeypatch.setenv("A2A_GITEA_WATCH_REPOS", "K2Lab/a")
+
+    assert load_config().webhook_port == 48731
+
+    monkeypatch.setenv("A2A_GITEA_WEBHOOK_PORT", "9999")
+    assert load_config().webhook_port == 9999

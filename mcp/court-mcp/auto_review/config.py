@@ -77,6 +77,7 @@ class AutoReviewConfig:
     worker_count: int = 2
     light_deep_threshold: int = 10
     gitea_base_url: str = "https://git.k2lab.ai"
+    webhook_port: int = 48731
     poll_discovery_interval_sec: int = 60
     poll_active_interval_sec: int = 30
 
@@ -116,6 +117,9 @@ def load_config(env: dict[str, str] | None = None) -> AutoReviewConfig:
             min_value=0,  # 0 = always deep is allowed
         ),
         gitea_base_url=(e.get("A2A_GITEA_BASE_URL") or "https://git.k2lab.ai").strip(),
+        webhook_port=_parse_positive_int(
+            "A2A_GITEA_WEBHOOK_PORT", e.get("A2A_GITEA_WEBHOOK_PORT"), 48731
+        ),
         poll_discovery_interval_sec=_parse_positive_int(
             "A2A_GITEA_POLL_DISCOVERY_SEC",
             e.get("A2A_GITEA_POLL_DISCOVERY_SEC"),
