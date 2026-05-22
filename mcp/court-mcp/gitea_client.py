@@ -125,6 +125,15 @@ class GiteaClient:
             json_body={"state": state},
         )
 
+    def get_pr(self, repo: str, number: int) -> dict[str, Any]:
+        """Fetch a PR's full payload from /repos/{owner}/{name}/pulls/{number}.
+
+        Returns Gitea PR detail dict including ``changed_files``, ``head.sha``,
+        ``requested_reviewers``, etc. Raises GiteaNotFoundError if missing.
+        """
+        owner, name = self._split_repo(repo)
+        return self._request_json("GET", f"/repos/{owner}/{name}/pulls/{number}")
+
     def _paginate(self, path: str, params: dict[str, str] | None = None) -> list[list[dict[str, Any]]]:
         page = 1
         pages: list[list[dict[str, Any]]] = []
