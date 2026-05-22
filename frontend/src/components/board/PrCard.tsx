@@ -62,7 +62,7 @@ export function PrCard({ card, onSpawnRequest, onJumpToTeam }: Props) {
             <Bot className="w-3 h-3" />
             <span className="truncate max-w-[100px]">{card.linked_team.replace('agent-team-', '')}</span>
           </button>
-        ) : onSpawnRequest ? (
+        ) : (card.state !== 'closed' && onSpawnRequest) ? (
           <button
             type="button"
             onClick={(e) => {

@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { persist, createJSONStorage } from 'zustand/middleware';
 import type { Status, GitBoard, GitBoardScope, AgentTeamsSnapshot } from './api';
 
 export interface ActivityEvent {
@@ -25,20 +26,33 @@ interface StoreState {
   setAgentTeams: (snap: AgentTeamsSnapshot) => void;
 }
 
-export const useStore = create<StoreState>((set) => ({
-  status: null,
-  connected: false,
-  lastUpdateTs: 0,
-  activity: [],
-  gitBoards: {},
-  agentTeams: null,
-  setStatus: (s) => set({ status: s, lastUpdateTs: Date.now() }),
-  setConnected: (c) => set({ connected: c }),
-  pushActivity: (events) =>
-    set((state) => ({
-      activity: [...events, ...state.activity].slice(0, ACTIVITY_RING_SIZE),
-    })),
-  setGitBoard: (scope, board) =>
-    set((state) => ({ gitBoards: { ...state.gitBoards, [scope]: board } })),
-  setAgentTeams: (snap) => set({ agentTeams: snap }),
-}));
+export const useStore = create<StoreState>()(
+  persist(
+    (set) => ({
+      status: null,
+      connected: false,
+      lastUpdateTs: 0,
+      activity: [],
+      gitBoards: {},
+      agentTeams: null,
+      setStatus: (s) => set({ status: s, lastUpdateTs: Date.now() }),
+      setConnected: (c) => set({ connected: c }),
+      pushActivity: (events) =>
+        set((state) => ({
+          activity: [...events, ...state.activity].slice(0, ACTIVITY_RING_SIZE),
+        })),
+      setGitBoard: (scope, board) =>
+        set((state) => ({ gitBoards: { ...state.gitBoards, [scope]: board } })),
+      setAgentTeams: (snap) => set({ agentTeams: snap }),
+    }),
+    {
+      name: 'court-dashboard-store',
+      storage: createJSONStorage(() => sessionStorage),
+      // Only persist the data caches, not SSE-driven transient state.
+      partialize: (state) => ({
+        gitBoards: state.gitBoards,
+        agentTeams: state.agentTeams,
+      }),
+    },
+  ),
+);
