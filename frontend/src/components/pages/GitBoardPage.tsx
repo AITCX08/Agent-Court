@@ -5,6 +5,7 @@ import {
   getGitBoard,
   refreshGitBoard,
   spawnAgent,
+  fetchAutoReviewStatus,
   type BoardCard,
   type GitBoardColumn,
   type GitBoardScope,
@@ -31,6 +32,7 @@ export function GitBoardPage() {
   const [scope, setScope] = useState<GitBoardScope>(readStoredScope);
   const boards = useStore((s) => s.gitBoards);
   const setBoardForScope = useStore((s) => s.setGitBoard);
+  const setAutoReviewStates = useStore((s) => s.setAutoReviewStates);
   const board = boards[scope] ?? null;
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -58,12 +60,21 @@ export function GitBoardPage() {
   useEffect(() => {
     localStorage.setItem(SCOPE_LS_KEY, scope);
     fetchFor(scope);
-    const id = window.setInterval(() => fetchFor(scope), AUTO_REFRESH_MS);
+    // PR-18e: 并行拉 auto-review 状态 (旁路注入到卡片), 失败静默 — 后端未启用时返回 {}
+    fetchAutoReviewStatus()
+      .then(setAutoReviewStates)
+      .catch(() => { /* auto_review optional, swallow */ });
+    const id = window.setInterval(() => {
+      fetchFor(scope);
+      fetchAutoReviewStatus()
+        .then(setAutoReviewStates)
+        .catch(() => { /* swallow */ });
+    }, AUTO_REFRESH_MS);
     return () => {
       inflightCancelledRef.current.cancelled = true;
       window.clearInterval(id);
     };
-  }, [scope, fetchFor]);
+  }, [scope, fetchFor, setAutoReviewStates]);
 
   const onRefresh = async () => {
     try {

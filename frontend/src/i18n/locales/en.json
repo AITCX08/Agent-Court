@@ -100,5 +100,19 @@
   },
   "court_runtime": {
     "subtitle": "Existing dashboard moved into this menu. Orchestrator health / pending approvals / watcher / receiver / tmux all live here."
+  },
+  "auto_review": {
+    "state": {
+      "discovered": "Discovered",
+      "queued": "Queued",
+      "running": "Reviewing",
+      "review_done": "Review done",
+      "posted": "Posted",
+      "failed": "Failed",
+      "dedupe_skipped": "Skipped"
+    },
+    "badge": {
+      "tooltip_with_runtime": "{{state}} · {{runtime}}"
+    }
   }
 }

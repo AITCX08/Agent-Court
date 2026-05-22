@@ -100,5 +100,19 @@
   },
   "court_runtime": {
     "subtitle": "现有 dashboard 收纳到此菜单. Orchestrator 健康 / 待审批 / Watcher / Receiver / Tmux 都在."
+  },
+  "auto_review": {
+    "state": {
+      "discovered": "已发现",
+      "queued": "排队中",
+      "running": "review 中",
+      "review_done": "review 完成",
+      "posted": "已发评论",
+      "failed": "失败",
+      "dedupe_skipped": "已跑过"
+    },
+    "badge": {
+      "tooltip_with_runtime": "{{state}} · {{runtime}}"
+    }
   }
 }
