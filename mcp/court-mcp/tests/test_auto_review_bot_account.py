@@ -81,3 +81,40 @@ def test_bot_account_email_optional():
     """email 字段可选, 默认 None."""
     bot = BotAccount(login="bot", user_id=1)
     assert bot.email is None
+
+
+def test_identify_bot_missing_id_field_raises():
+    """whoami payload 缺 id 字段 — 防止 user_id 静默退化为 0."""
+    client = _FakeClient({"login": "agent-court-bot"})
+    cfg = _make_cfg("agent-court-bot")
+
+    with pytest.raises(BotAccountMismatch, match="'id'"):
+        identify_bot(cfg, client=client)
+
+
+def test_identify_bot_non_int_id_field_raises():
+    """whoami 'id' 不是整数, 抛 BotAccountMismatch (不是 ValueError)."""
+    client = _FakeClient({"login": "agent-court-bot", "id": "not-a-number"})
+    cfg = _make_cfg("agent-court-bot")
+
+    with pytest.raises(BotAccountMismatch, match="not an integer"):
+        identify_bot(cfg, client=client)
+
+
+def test_identify_bot_non_string_login_raises():
+    """whoami 'login' 类型错 (list / int) → BotAccountMismatch, 不是 AttributeError."""
+    client = _FakeClient({"login": ["array"], "id": 42})
+    cfg = _make_cfg("agent-court-bot")
+
+    with pytest.raises(BotAccountMismatch, match="not a string"):
+        identify_bot(cfg, client=client)
+
+
+def test_identify_bot_empty_email_normalized_to_none():
+    """Gitea 对隐藏邮箱用户可能返回 email='', 归一化为 None 避免下游分歧."""
+    client = _FakeClient({"login": "agent-court-bot", "id": 42, "email": ""})
+    cfg = _make_cfg("agent-court-bot")
+
+    bot = identify_bot(cfg, client=client)
+
+    assert bot.email is None
