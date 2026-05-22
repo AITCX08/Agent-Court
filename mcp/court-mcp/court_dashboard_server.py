@@ -90,6 +90,7 @@ def create_app(
     app.router.add_post("/api/agent/spawn", handle_agent_spawn)
     app.router.add_delete("/api/agent/{team_id}", handle_agent_kill)
     app.router.add_get("/api/events", handle_events)
+    app.router.add_get("/api/auto-review/status", auto_review_status_handler)
     app.router.add_post("/api/approve", handle_approve)
     app.router.add_post("/api/reject", handle_reject)
     app.router.add_post("/api/kill", handle_kill)
@@ -337,6 +338,34 @@ async def handle_agent_kill(request: web.Request) -> web.Response:
     # invalidate git_board cache so linked_team disappears
     request.app["git_board"].invalidate()
     return web.json_response(result)
+
+
+# ---------------------------------------------------------------------------
+# PR-18e: /api/auto-review/status (read-only badge state per PR/issue)
+# ---------------------------------------------------------------------------
+
+
+async def auto_review_status_handler(request: web.Request) -> web.Response:
+    """GET /api/auto-review/status — current auto-review state per PR/issue for board badges.
+
+    Defensive: returns {} if the SQLite state file doesn't exist (the auto-review
+    dispatcher is not running yet — wired in a future entry-point PR). Returns
+    {"error": "..."} with 500 if the file exists but reading fails.
+    """
+    from pathlib import Path
+    db_path = Path.home() / ".agent-court" / "auto_review" / "state.sqlite3"
+    if not db_path.exists():
+        return web.json_response({})
+    try:
+        from auto_review.state import StateStore
+        from auto_review.status_api import build_status_map
+        store = StateStore(str(db_path))
+        try:
+            return web.json_response(build_status_map(store))
+        finally:
+            store.close()
+    except Exception as exc:
+        return web.json_response({"error": str(exc)}, status=500)
 
 
 # ---------------------------------------------------------------------------
