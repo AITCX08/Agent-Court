@@ -1,6 +1,8 @@
 import { Sparkles, Bot } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { ChipBadge } from './ChipBadge';
+import { AutoReviewBadge } from './AutoReviewBadge';
+import { useStore } from '../../lib/store';
 import type { BoardCard } from '../../lib/api';
 
 interface Props {
@@ -19,6 +21,10 @@ const COLOR_BAR_CLASS: Record<string, string> = {
 export function PrCard({ card, onSpawnRequest, onJumpToTeam }: Props) {
   const { t } = useTranslation();
   const barCls = COLOR_BAR_CLASS[card.color_bar] || COLOR_BAR_CLASS.gray;
+  // PR-18e: auto-review state 旁路 join (key 形如 "owner/repo#123")
+  const autoReviewStates = useStore((s) => s.autoReviewStates);
+  const arKey = `${card.repo}#${card.number}`;
+  const arState = autoReviewStates[arKey];
 
   // 整卡当 <a> — 任何位置点击都跳; 内部按钮 stopPropagation+preventDefault
   // 防止冒泡触发跳转. <a> 里嵌 <button> 浏览器实测能正常工作 (button 接管点击).
@@ -83,7 +89,7 @@ export function PrCard({ card, onSpawnRequest, onJumpToTeam }: Props) {
         ) : null}
       </div>
 
-      {card.tags.length > 0 && (
+      {(card.tags.length > 0 || arState) && (
         <div className="flex items-center gap-1 flex-wrap">
           {card.tags.map((tag) => {
             const tone = tag === 'open' ? 'open'
@@ -95,6 +101,7 @@ export function PrCard({ card, onSpawnRequest, onJumpToTeam }: Props) {
               <ChipBadge key={tag} tone={tone}>{t(labelKey, { defaultValue: tag })}</ChipBadge>
             );
           })}
+          {arState && <AutoReviewBadge state={arState} />}
         </div>
       )}
     </a>

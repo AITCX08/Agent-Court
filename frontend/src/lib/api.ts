@@ -170,6 +170,23 @@ export function refreshGitBoard(scope?: GitBoardScope): Promise<{ ok: true }> {
   return call('POST', '/api/git-board/refresh', scope ? { scope } : {});
 }
 
+// PR-18e: Auto-review status (旁路注入到 PR/issue 卡片上)
+// 后端 SQLite state file 不存在时返回 {} (auto-review 未启用), 前端显示无 badge
+export interface AutoReviewState {
+  state: 'discovered' | 'queued' | 'running' | 'review_done' | 'posted' | 'failed' | 'dedupe_skipped';
+  kind: 'pr' | 'issue';
+  runtime: string | null;
+  head_sha: string | null;
+  last_event_at: string;
+  error_message: string | null;
+}
+
+export type AutoReviewStatusMap = Record<string, AutoReviewState>;
+
+export function fetchAutoReviewStatus(): Promise<AutoReviewStatusMap> {
+  return call<AutoReviewStatusMap>('GET', '/api/auto-review/status');
+}
+
 // PR-17a: Agent Teams
 export type AgentKind = 'ghostty' | 'tmux';
 

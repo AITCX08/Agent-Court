@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
-import type { Status, GitBoard, GitBoardScope, AgentTeamsSnapshot } from './api';
+import type { Status, GitBoard, GitBoardScope, AgentTeamsSnapshot, AutoReviewStatusMap } from './api';
 
 export interface ActivityEvent {
   id: string;
@@ -19,11 +19,14 @@ interface StoreState {
   // PR-17d: cross-tab persistent caches
   gitBoards: Partial<Record<GitBoardScope, GitBoard>>;
   agentTeams: AgentTeamsSnapshot | null;
+  // PR-18e: auto-review status map ("repo#number" -> AutoReviewState)
+  autoReviewStates: AutoReviewStatusMap;
   setStatus: (s: Status) => void;
   setConnected: (c: boolean) => void;
   pushActivity: (events: ActivityEvent[]) => void;
   setGitBoard: (scope: GitBoardScope, board: GitBoard) => void;
   setAgentTeams: (snap: AgentTeamsSnapshot) => void;
+  setAutoReviewStates: (states: AutoReviewStatusMap) => void;
 }
 
 export const useStore = create<StoreState>()(
@@ -35,6 +38,7 @@ export const useStore = create<StoreState>()(
       activity: [],
       gitBoards: {},
       agentTeams: null,
+      autoReviewStates: {},
       setStatus: (s) => set({ status: s, lastUpdateTs: Date.now() }),
       setConnected: (c) => set({ connected: c }),
       pushActivity: (events) =>
@@ -44,6 +48,7 @@ export const useStore = create<StoreState>()(
       setGitBoard: (scope, board) =>
         set((state) => ({ gitBoards: { ...state.gitBoards, [scope]: board } })),
       setAgentTeams: (snap) => set({ agentTeams: snap }),
+      setAutoReviewStates: (states) => set({ autoReviewStates: states }),
     }),
     {
       name: 'court-dashboard-store',
@@ -52,6 +57,7 @@ export const useStore = create<StoreState>()(
       partialize: (state) => ({
         gitBoards: state.gitBoards,
         agentTeams: state.agentTeams,
+        autoReviewStates: state.autoReviewStates,
       }),
     },
   ),
