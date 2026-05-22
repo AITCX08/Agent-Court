@@ -1,6 +1,8 @@
 import { Sparkles, Bot } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { ChipBadge } from './ChipBadge';
+import { AutoReviewBadge } from './AutoReviewBadge';
+import { useStore } from '../../lib/store';
 import type { BoardCard } from '../../lib/api';
 
 interface Props {
@@ -11,6 +13,10 @@ interface Props {
 
 export function IssueCard({ card, onSpawnRequest, onJumpToTeam }: Props) {
   const { t } = useTranslation();
+  // PR-18e: auto-review state 旁路 join (key 形如 "owner/repo#123")
+  const autoReviewStates = useStore((s) => s.autoReviewStates);
+  const arKey = `${card.repo}#${card.number}`;
+  const arState = autoReviewStates[arKey];
   return (
     <div className="relative shrink-0 w-60 rounded-md bg-bg-card hover:bg-bg-card-hover
                     border border-border-base transition pl-3 pr-3 py-2.5
@@ -61,11 +67,12 @@ export function IssueCard({ card, onSpawnRequest, onJumpToTeam }: Props) {
         ) : null}
       </div>
 
-      {card.tags.length > 0 && (
+      {(card.tags.length > 0 || arState) && (
         <div className="flex items-center gap-1 flex-wrap">
           {card.tags.map((tag) => (
             <ChipBadge key={tag} tone={tag === 'open' ? 'open' : 'gray'}>{tag}</ChipBadge>
           ))}
+          {arState && <AutoReviewBadge state={arState} />}
         </div>
       )}
     </div>
