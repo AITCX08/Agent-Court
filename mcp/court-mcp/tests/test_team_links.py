@@ -82,3 +82,57 @@ def test_remove_link_nonexistent_no_disk_write(tmp_path):
     links.remove_link("agent-team-never-existed")
     # remove_link 不该建文件
     assert not path.exists()
+
+
+# ---- PR-19c-1: cleanup_orphans ----
+
+def test_cleanup_orphans_removes_dead_tmux_sessions(tmp_path):
+    """tmux 不存在的 agent-team-* link 被清掉; live 的保留."""
+    links = tl.TeamLinks(court_root=tmp_path)
+    links.set_link("agent-team-alive1", "K2Lab/foo", 1, "pr", "u1")
+    links.set_link("agent-team-dead1", "K2Lab/foo", 2, "pr", "u2")
+    links.set_link("agent-team-dead2", "K2Lab/bar", 3, "issue", "u3")
+
+    cleaned = links.cleanup_orphans(live_sessions={"agent-team-alive1"})
+
+    assert sorted(cleaned) == ["agent-team-dead1", "agent-team-dead2"]
+    assert links.lookup_by_team("agent-team-alive1") is not None
+    assert links.lookup_by_team("agent-team-dead1") is None
+    assert links.lookup_by_team("agent-team-dead2") is None
+    # by_target 也应同步清掉
+    assert links.lookup_by_target("pr", "K2Lab/foo", 2) is None
+    assert links.lookup_by_target("issue", "K2Lab/bar", 3) is None
+    assert links.lookup_by_target("pr", "K2Lab/foo", 1) == "agent-team-alive1"
+
+
+def test_cleanup_orphans_skips_non_agent_team_prefix(tmp_path):
+    """非 agent-team- 前缀的 link 不在清理范围 (将来 ghostty 可能挂 link)."""
+    links = tl.TeamLinks(court_root=tmp_path)
+    links.set_link("agent-team-dead", "K2Lab/foo", 1, "pr", "u1")
+    # 模拟一个不是 dashboard spawn 的 link
+    links._by_team["ghostty:ttys001"] = {"repo": "K2Lab/foo", "number": 99, "kind": "pr", "url": "x"}
+    links._by_target["pr:K2Lab/foo#99"] = "ghostty:ttys001"
+    links._save()
+
+    cleaned = links.cleanup_orphans(live_sessions=set())
+
+    assert cleaned == ["agent-team-dead"]
+    # ghostty 来源的 link 不动
+    assert links.lookup_by_team("ghostty:ttys001") is not None
+
+
+def test_cleanup_orphans_no_disk_write_when_all_alive(tmp_path):
+    """全 live 时 cleanup 不触发磁盘写入."""
+    links = tl.TeamLinks(court_root=tmp_path)
+    links.set_link("agent-team-a", "K2Lab/foo", 1, "pr", "u1")
+    path = tmp_path / "team-links.json"
+    mtime_before = path.stat().st_mtime
+    import time; time.sleep(0.01)
+    cleaned = links.cleanup_orphans(live_sessions={"agent-team-a"})
+    assert cleaned == []
+    assert path.stat().st_mtime == mtime_before  # 没动
+
+
+def test_cleanup_orphans_empty_store_returns_empty(tmp_path):
+    links = tl.TeamLinks(court_root=tmp_path)
+    assert links.cleanup_orphans(live_sessions=set()) == []
