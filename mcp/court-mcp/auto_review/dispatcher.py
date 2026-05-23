@@ -39,6 +39,16 @@ class ReviewDispatcher:
 
     def process_one(self, task: AutoReviewTask) -> str:
         """Drive one task end-to-end; return final TaskState value string."""
+        # PR-18g: parallel-job guard — 同 (repo, number) 已有 active task 时跳过
+        # 防止同 PR 不同 head_sha 并发执行 (port KAXY-3022/Agent-manager d348400)
+        active = self._store.find_active_task(task.repo, task.number)
+        if active is not None and active.id != task.id:
+            self._store.update_state(
+                task.id, TaskState.DEDUPE_SKIPPED,
+                error_message=f"active task id={active.id} state={active.state.value}",
+            )
+            return TaskState.DEDUPE_SKIPPED.value
+
         try:
             self._store.update_state(task.id, TaskState.QUEUED)
             context = self._fetch_context(task)

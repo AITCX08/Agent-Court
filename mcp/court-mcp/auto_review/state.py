@@ -158,6 +158,29 @@ class StateStore:
         ).fetchall()
         return [self._row_to_task(r) for r in rows]
 
+    def find_active_task(self, repo: str, number: int) -> Optional[AutoReviewTask]:
+        """Return any task for (repo, number) currently in flight, or None.
+
+        "In flight" = state in {QUEUED, RUNNING, REVIEW_DONE} regardless of
+        head_sha. Used by dispatcher.process_one to prevent two head_shas of
+        the same PR from being reviewed in parallel (mirrors KAXY-3022/
+        Agent-manager d348400). Returns the most recently updated active task.
+        """
+        row = self._conn.execute(
+            """SELECT * FROM auto_review_tasks
+               WHERE repo = ? AND number = ?
+                 AND state IN (?, ?, ?)
+               ORDER BY last_event_at DESC, id DESC
+               LIMIT 1""",
+            (
+                repo, number,
+                TaskState.QUEUED.value,
+                TaskState.RUNNING.value,
+                TaskState.REVIEW_DONE.value,
+            ),
+        ).fetchone()
+        return self._row_to_task(row) if row else None
+
     def known_pr_keys(self) -> list[tuple[str, int]]:
         """For active polling: list distinct (repo, number) of PR tasks we've seen."""
         rows = self._conn.execute(

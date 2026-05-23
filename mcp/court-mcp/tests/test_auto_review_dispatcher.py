@@ -285,3 +285,37 @@ def test_process_pending_no_discovered_returns_empty():
                         light=_fake_light(), deep=_fake_deep())
     results = d.process_pending(limit=10)
     assert results == []
+
+
+def test_parallel_job_guard_skips_when_active_exists():
+    """同 PR 两个 head_sha, 第一个走 RUNNING, 第二个调 process_one 时被跳."""
+    store = StateStore(":memory:")
+    t1 = _enqueue_pr(store, head_sha="sha-old")
+    store.update_state(t1.id, TaskState.RUNNING)  # 模拟 t1 还在跑
+    t2 = _enqueue_pr(store, head_sha="sha-new")
+    client = _client_for_pr(changed_files=3)
+    d = ReviewDispatcher(cfg=_cfg(), store=store, client=client,
+                        light=_fake_light(), deep=_fake_deep())
+
+    final = d.process_one(t2)
+
+    assert final == TaskState.DEDUPE_SKIPPED.value
+    client.get_pr.assert_not_called()  # fetch_context 没发生
+    refreshed = store.get_by_dedupe_key(t2.dedupe_key)
+    assert refreshed.state == TaskState.DEDUPE_SKIPPED
+    assert "active task" in (refreshed.error_message or "")
+
+
+def test_parallel_job_guard_allows_after_active_finishes():
+    """active task 跑完进 POSTED 后, 新 head_sha 可以正常跑."""
+    store = StateStore(":memory:")
+    t1 = _enqueue_pr(store, head_sha="sha-old")
+    store.update_state(t1.id, TaskState.POSTED)  # t1 已结束
+    t2 = _enqueue_pr(store, head_sha="sha-new")
+    client = _client_for_pr(changed_files=3)
+    d = ReviewDispatcher(cfg=_cfg(), store=store, client=client,
+                        light=_fake_light(), deep=_fake_deep())
+
+    final = d.process_one(t2)
+
+    assert final == TaskState.POSTED.value

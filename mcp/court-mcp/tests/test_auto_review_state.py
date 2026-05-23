@@ -171,3 +171,36 @@ def test_task_state_enum_values():
 def test_task_kind_enum_values():
     assert TaskKind.PR.value == "pr"
     assert TaskKind.ISSUE.value == "issue"
+
+
+def test_find_active_task_returns_none_when_idle(store):
+    """没有任何 task 时返回 None."""
+    assert store.find_active_task("K2Lab/a", 1) is None
+
+
+def test_find_active_task_finds_in_flight(store):
+    """同 PR 不同 head_sha, 第一个 RUNNING — find_active_task 返活的."""
+    t1 = store.enqueue(kind=TaskKind.PR, repo="K2Lab/a", number=1, head_sha="s1")
+    store.update_state(t1.id, TaskState.RUNNING)
+    t2 = store.enqueue(kind=TaskKind.PR, repo="K2Lab/a", number=1, head_sha="s2")
+    found = store.find_active_task("K2Lab/a", 1)
+    assert found is not None
+    # SQL only includes QUEUED/RUNNING/REVIEW_DONE — t1 (RUNNING) matches,
+    # t2 (DISCOVERED) does not
+    assert found.id == t1.id
+    assert found.state == TaskState.RUNNING
+
+
+def test_find_active_task_ignores_terminal_states(store):
+    """POSTED / FAILED / DEDUPE_SKIPPED 不算 active."""
+    t = store.enqueue(kind=TaskKind.PR, repo="K2Lab/a", number=1, head_sha="s")
+    store.update_state(t.id, TaskState.POSTED)
+    assert store.find_active_task("K2Lab/a", 1) is None
+
+    t2 = store.enqueue(kind=TaskKind.PR, repo="K2Lab/a", number=2, head_sha="s")
+    store.update_state(t2.id, TaskState.FAILED, error_message="x")
+    assert store.find_active_task("K2Lab/a", 2) is None
+
+    t3 = store.enqueue(kind=TaskKind.PR, repo="K2Lab/a", number=3, head_sha="s")
+    store.update_state(t3.id, TaskState.DEDUPE_SKIPPED)
+    assert store.find_active_task("K2Lab/a", 3) is None
