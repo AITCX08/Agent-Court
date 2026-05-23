@@ -111,7 +111,12 @@
       "view_terminal": "View terminal",
       "view_terminal_title": "Terminal contents",
       "view_terminal_loading": "Connecting to pane SSE stream...",
-      "view_terminal_ghostty_hint": "Ghostty terminals are private to the user. The dashboard cannot read their output. Please check the corresponding ghostty window directly."
+      "view_terminal_ghostty_hint": "Ghostty terminals are private to the user. The dashboard cannot read their output. Please check the corresponding ghostty window directly.",
+      "terminal_input_placeholder": "Reply to the agent or send a command (Cmd+Enter to send)",
+      "terminal_send": "Send",
+      "terminal_send_preview": "Will send",
+      "terminal_send_failed": "Send failed: {{detail}}",
+      "terminal_options_hint": "Agent listed options — click chips to pick (1 per question); combine with the textarea below if you want (e.g. pick 1a + add free text)"
     },
     "empty": "No agents running. Open claude in a ghostty tab and it appears within seconds.",
     "fetch_error": "Failed to load agents: {{detail}}",

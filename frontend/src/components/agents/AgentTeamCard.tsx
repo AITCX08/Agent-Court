@@ -1,9 +1,69 @@
-import { useEffect, useRef, useState } from 'react';
-import { Terminal, ServerCog, Pencil, Check, X, Cpu, ExternalLink, Square, Eye, Loader2 } from 'lucide-react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { Terminal, ServerCog, Pencil, Check, X, Cpu, ExternalLink, Square, Eye, Loader2, Send } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import type { AgentTeam, AgentSummary } from '../../lib/api';
-import { setAgentTeamLabel, killAgent, getAgentSummary, getToken } from '../../lib/api';
+import { setAgentTeamLabel, killAgent, getAgentSummary, sendAgentInput, getToken } from '../../lib/api';
 import { useToast } from '../Toast';
+
+/**
+ * PR-19f: parse `(a)/(b)/(c)` 选项分组
+ *
+ * 用 bootstrap_protocol 强制 agent 输出格式:
+ *   1. <Q1>
+ *      (a) ...
+ *      (b) ...
+ *      (c) ...
+ *   2. <Q2>
+ *      (a) ...
+ *
+ * 返回最后一组连续 question (每问 ≥2 个 (a)(b)... 字母连续). 不在最后区块的旧
+ * pane 内容忽略, 避免 scrollback 误识别已经回答过的选项题.
+ */
+interface OptionItem { letter: string; text: string }
+interface OptionGroup { questionIndex: number; items: OptionItem[] }
+
+function parseOptionGroups(paneContent: string): OptionGroup[] {
+  if (!paneContent) return [];
+  // 拿 pane 最后 ~80 行 (= 当前屏 + 一点), 避免抓到 scrollback 里早已答过的旧题
+  const lines = paneContent.split('\n').slice(-80);
+  // regex 抓行: 可选缩进 / `-`*` / `1.` 前缀, 然后 `(a)` ~ `(z)` 字母 + 文本
+  const optionRe = /^\s*(?:[-*]\s+|\d+\.\s+)?\(([a-z])\)\s+(.+?)\s*$/;
+  // 抓"独立 question 行": `1. ...` / `2. ...` (顶格或缩进开头)
+  const questionRe = /^\s*(\d+)\.\s+(?!\()(.+)$/;
+
+  const groups: OptionGroup[] = [];
+  let currentQuestion: number | null = null;
+  let currentItems: OptionItem[] = [];
+
+  const flush = () => {
+    if (currentItems.length >= 2 && currentQuestion !== null) {
+      // 字母连续校验: a,b,c... 不能跳
+      const letters = currentItems.map((x) => x.letter);
+      const expected = letters.map((_, i) => String.fromCharCode(97 + i));
+      const ok = letters.every((l, i) => l === expected[i]);
+      if (ok) {
+        groups.push({ questionIndex: currentQuestion, items: [...currentItems] });
+      }
+    }
+    currentItems = [];
+  };
+
+  for (const line of lines) {
+    const qm = line.match(questionRe);
+    if (qm) {
+      flush();
+      currentQuestion = parseInt(qm[1], 10);
+      continue;
+    }
+    const om = line.match(optionRe);
+    if (om && currentQuestion !== null) {
+      currentItems.push({ letter: om[1], text: om[2] });
+    }
+  }
+  flush();
+
+  return groups;
+}
 
 interface Props {
   team: AgentTeam;
@@ -365,15 +425,22 @@ export function AgentTeamCard({ team, onLabelSaved, onTeamKilled, highlighted }:
 // PR-19c-3: 查看终端 modal — 仅 tmux 类型走 SSE 实时显示 pane; ghostty 提示
 function TerminalViewerModal({ team, onClose }: { team: AgentTeam; onClose: () => void }) {
   const { t } = useTranslation();
+  const { push } = useToast();
   const isTmux = team.kind === 'tmux';
   const [content, setContent] = useState('');
   const [streamError, setStreamError] = useState<string | null>(null);
   const preRef = useRef<HTMLPreElement | null>(null);
+  // PR-19f: 输入框 + chip 选项
+  const [input, setInput] = useState('');
+  const [sending, setSending] = useState(false);
+  // chip selection: { [questionIndex]: letter } — 每题最多 1 个
+  const [chipSelection, setChipSelection] = useState<Record<number, string>>({});
+
+  // 拿 tmux session 名 (去 "tmux:" 前缀)
+  const tmuxId = team.id.startsWith('tmux:') ? team.id.slice('tmux:'.length) : team.id;
 
   useEffect(() => {
     if (!isTmux) return;
-    // tmux:agent-team-xxx → 去 "tmux:" 前缀供 SSE endpoint 用
-    const tmuxId = team.id.startsWith('tmux:') ? team.id.slice('tmux:'.length) : team.id;
     const token = getToken();
     const url = `/api/agent/${encodeURIComponent(tmuxId)}/pane/stream?t=${encodeURIComponent(token)}`;
     const es = new EventSource(url);
@@ -392,7 +459,7 @@ function TerminalViewerModal({ team, onClose }: { team: AgentTeam; onClose: () =
     };
     es.onerror = () => setStreamError('connection lost (retrying...)');
     return () => es.close();
-  }, [isTmux, team.id]);
+  }, [isTmux, tmuxId]);
 
   useEffect(() => {
     const el = preRef.current;
@@ -407,13 +474,66 @@ function TerminalViewerModal({ team, onClose }: { team: AgentTeam; onClose: () =
     return () => window.removeEventListener('keydown', onKey);
   }, [onClose]);
 
+  // PR-19f: 解析 pane 当前可见选项
+  const optionGroups = useMemo(() => parseOptionGroups(content), [content]);
+
+  // 当 pane 内容变化 (agent 新出题), 清掉旧 selection
+  // (用 group keys 做 dependency 判断 — group 列表变化时重置)
+  const groupKey = useMemo(
+    () => optionGroups.map((g) => `${g.questionIndex}:${g.items.map((i) => i.letter).join('')}`).join('|'),
+    [optionGroups],
+  );
+  useEffect(() => {
+    setChipSelection({});
+  }, [groupKey]);
+
+  const toggleChip = (q: number, letter: string) => {
+    setChipSelection((prev) => {
+      const next = { ...prev };
+      if (next[q] === letter) delete next[q];
+      else next[q] = letter;
+      return next;
+    });
+  };
+
+  const buildPayload = (): string => {
+    // 拼 chip selection: "1a 2c 3b" (按 questionIndex 升序)
+    const chipPart = optionGroups
+      .map((g) => g.questionIndex)
+      .filter((q) => chipSelection[q])
+      .sort((a, b) => a - b)
+      .map((q) => `${q}${chipSelection[q]}`)
+      .join(' ');
+    const textPart = input.trim();
+    if (chipPart && textPart) return `${chipPart} ${textPart}`;
+    return chipPart || textPart;
+  };
+
+  const payload = buildPayload();
+  const canSend = isTmux && !sending && payload.length > 0;
+
+  const sendNow = async () => {
+    if (!canSend) return;
+    setSending(true);
+    try {
+      await sendAgentInput(tmuxId, payload);
+      setInput('');
+      setChipSelection({});
+    } catch (err) {
+      push({ kind: 'err', text: t('agents.card.terminal_send_failed', { detail: (err as Error).message }) });
+    } finally {
+      setSending(false);
+    }
+  };
+
   return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm"
       onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
     >
       <div className="bg-bg-card border border-border-strong rounded-lg shadow-2xl
-                      w-[760px] max-w-[95vw] max-h-[90vh] flex flex-col">
+                      w-[820px] max-w-[95vw] max-h-[92vh] flex flex-col">
+        {/* Header */}
         <div className="flex items-center justify-between px-5 py-3 border-b border-border-base">
           <div className="text-sm font-semibold text-fg-primary flex items-center gap-2">
             <Terminal className="w-4 h-4" />
@@ -431,6 +551,8 @@ function TerminalViewerModal({ team, onClose }: { team: AgentTeam; onClose: () =
             <X className="w-4 h-4" />
           </button>
         </div>
+
+        {/* Body */}
         <div className="flex-1 min-h-0 overflow-auto p-4">
           {isTmux ? (
             <>
@@ -443,7 +565,7 @@ function TerminalViewerModal({ team, onClose }: { team: AgentTeam; onClose: () =
                 ref={preRef}
                 className="bg-bg-base border border-border-base rounded-md p-3
                            text-[11px] text-fg-secondary font-mono whitespace-pre leading-snug
-                           min-h-[60vh] max-h-[70vh] overflow-auto"
+                           min-h-[50vh] max-h-[60vh] overflow-auto"
               >
                 {content || (
                   <span className="text-fg-muted italic">
@@ -465,6 +587,84 @@ function TerminalViewerModal({ team, onClose }: { team: AgentTeam; onClose: () =
             </div>
           )}
         </div>
+
+        {/* PR-19f: 选项 chip 行 + 输入框 (仅 tmux) */}
+        {isTmux && (
+          <div className="border-t border-border-base px-5 py-3 flex flex-col gap-2">
+            {optionGroups.length > 0 && (
+              <div className="flex flex-col gap-1.5">
+                <div className="text-[10px] text-fg-muted">
+                  {t('agents.card.terminal_options_hint')}
+                </div>
+                {optionGroups.map((g) => (
+                  <div key={g.questionIndex} className="flex items-center gap-1.5 flex-wrap">
+                    <span className="text-[11px] text-fg-secondary font-medium min-w-[1.5rem]">
+                      {g.questionIndex}.
+                    </span>
+                    {g.items.map((opt) => {
+                      const selected = chipSelection[g.questionIndex] === opt.letter;
+                      return (
+                        <button
+                          key={opt.letter}
+                          type="button"
+                          onClick={() => toggleChip(g.questionIndex, opt.letter)}
+                          title={opt.text}
+                          className={`text-[11px] px-2 py-0.5 rounded-md border transition
+                                     inline-flex items-center gap-1 max-w-[260px] ${
+                            selected
+                              ? 'bg-accent-primary/25 text-accent-primary border-accent-primary/60'
+                              : 'bg-bg-base text-fg-secondary border-border-base hover:border-accent-primary/40 hover:text-fg-primary'
+                          }`}
+                        >
+                          <span className="font-mono font-semibold">({opt.letter})</span>
+                          <span className="truncate">{opt.text}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                ))}
+              </div>
+            )}
+            <div className="flex items-start gap-2">
+              <textarea
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+                    e.preventDefault();
+                    sendNow();
+                  }
+                }}
+                placeholder={t('agents.card.terminal_input_placeholder')}
+                rows={2}
+                disabled={sending}
+                className="flex-1 bg-bg-base border border-border-strong rounded-md
+                           px-2.5 py-1.5 text-sm text-fg-primary placeholder:text-fg-muted
+                           focus:outline-none focus:border-accent-primary/60
+                           disabled:opacity-40 resize-y font-mono"
+              />
+              <button
+                type="button"
+                onClick={sendNow}
+                disabled={!canSend}
+                title={t('agents.card.terminal_send')}
+                className="px-3 py-1.5 rounded-md bg-accent-primary/15 text-accent-primary
+                           border border-accent-primary/30 hover:bg-accent-primary/25 transition
+                           disabled:opacity-40 inline-flex items-center gap-1 text-xs"
+              >
+                {sending ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Send className="w-3.5 h-3.5" />}
+                {t('agents.card.terminal_send')}
+              </button>
+            </div>
+            {payload && (
+              <div className="text-[10px] text-fg-muted">
+                {t('agents.card.terminal_send_preview')}: <code className="text-fg-secondary">{payload}</code>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Footer */}
         <div className="flex items-center justify-end px-5 py-3 border-t border-border-base">
           <button
             type="button"
