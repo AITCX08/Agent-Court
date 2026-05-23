@@ -8,9 +8,11 @@ interface Props {
   emptyText: string;
   onSpawnRequest?: (card: BoardCard) => void;
   onJumpToTeam?: (teamId: string) => void;
+  /** PR-19a: 卡片侧关 agent 后回调父刷新看板 */
+  onTeamKilled?: () => void;
 }
 
-export function KanbanColumn({ title, cards, emptyText, onSpawnRequest, onJumpToTeam }: Props) {
+export function KanbanColumn({ title, cards, emptyText, onSpawnRequest, onJumpToTeam, onTeamKilled }: Props) {
   return (
     <div className="flex flex-col rounded-lg bg-bg-base border border-border-base min-w-0">
       <header className="flex items-center justify-between px-3 py-2 border-b border-border-base">
@@ -24,7 +26,13 @@ export function KanbanColumn({ title, cards, emptyText, onSpawnRequest, onJumpTo
           </div>
         ) : (
           cards.map((c) => (
-            <PrCard key={`${c.repo}#${c.number}`} card={c} onSpawnRequest={onSpawnRequest} onJumpToTeam={onJumpToTeam} />
+            <PrCard
+              key={`${c.repo}#${c.number}`}
+              card={c}
+              onSpawnRequest={onSpawnRequest}
+              onJumpToTeam={onJumpToTeam}
+              onTeamKilled={onTeamKilled}
+            />
           ))
         )}
       </div>

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Terminal, ServerCog, Pencil, Check, X, Cpu, ExternalLink, Square } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import type { AgentTeam } from '../../lib/api';
@@ -9,6 +9,8 @@ interface Props {
   team: AgentTeam;
   onLabelSaved?: () => void;
   onTeamKilled?: () => void;
+  /** PR-19a: 看板跳转过来时高亮目标卡片 — 加 ring + scroll into view */
+  highlighted?: boolean;
 }
 
 function formatStartedAt(iso: string): string {
@@ -19,7 +21,7 @@ function formatStartedAt(iso: string): string {
   return d.toLocaleString(undefined, { hour12: false });
 }
 
-export function AgentTeamCard({ team, onLabelSaved, onTeamKilled }: Props) {
+export function AgentTeamCard({ team, onLabelSaved, onTeamKilled, highlighted }: Props) {
   const { t } = useTranslation();
   const { push } = useToast();
   const [editing, setEditing] = useState(false);
@@ -27,6 +29,13 @@ export function AgentTeamCard({ team, onLabelSaved, onTeamKilled }: Props) {
   const [saving, setSaving] = useState(false);
   const [confirmingStop, setConfirmingStop] = useState(false);
   const [stopping, setStopping] = useState(false);
+  // PR-19a: 高亮时 scroll into view (block: 'center' 让目标卡片居中)
+  const rootRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (highlighted) {
+      rootRef.current?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    }
+  }, [highlighted]);
 
   const isGhostty = team.kind === 'ghostty';
   const KindIcon = isGhostty ? Terminal : ServerCog;
@@ -71,7 +80,14 @@ export function AgentTeamCard({ team, onLabelSaved, onTeamKilled }: Props) {
   };
 
   return (
-    <div className="rounded-lg bg-bg-card border border-border-base p-4 flex flex-col gap-3">
+    <div
+      ref={rootRef}
+      className={`rounded-lg bg-bg-card border p-4 flex flex-col gap-3 transition ${
+        highlighted
+          ? 'border-accent-purple ring-2 ring-accent-purple/60 ring-offset-2 ring-offset-bg-base shadow-lg shadow-accent-purple/20'
+          : 'border-border-base'
+      }`}
+    >
       {/* Header: kind icon + label/edit + chip */}
       <div className="flex items-start gap-3">
         <div className={`w-9 h-9 rounded-md flex items-center justify-center flex-shrink-0 ${

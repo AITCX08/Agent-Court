@@ -59,7 +59,11 @@
       "spawn_pending": "Spawning...",
       "spawn_error": "Spawn failed: {{detail}}",
       "spawn_success": "Spawned as {{team}}",
-      "spawn_already": "Already spawned, jumping to agent"
+      "spawn_already": "Already spawned, jumping to agent",
+      "kill_agent": "Kill agent",
+      "kill_confirm_title": "Kill?",
+      "kill_confirm_yes": "Confirm",
+      "kill_confirm_no": "Cancel"
     },
     "issues_section": "Issues",
     "no_pr": "No PRs",
