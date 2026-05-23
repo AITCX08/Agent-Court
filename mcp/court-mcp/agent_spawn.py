@@ -85,16 +85,17 @@ class AgentSpawner:
         }
 
     def spawn_freeform(self, *, label: str, initial_prompt: str) -> dict[str, Any]:
-        """Spawn a freeform agent team — no PR/issue binding (PR-19b-1).
+        """Spawn a freeform agent team — no PR/issue binding (PR-19b-1 / PR-19e).
 
         Reads ``freeform_bootstrap.txt`` (a protocol prompt explaining the
         /req → superpowers brainstorming → writing-plans → wait /proceed →
         executing-plans flow), substitutes ``{{INITIAL_PROMPT}}`` with the
-        user's text, and sends the whole thing into the new tmux session via
-        ``tmux_pane.send_keys_text`` (literal multi-line + Enter).
+        user's text, and **pastes** the whole thing via ``tmux paste-buffer``
+        into the new claude TUI session (PR-19e: bracketed-paste mode lets
+        claude treat multi-line text as one paste event + auto-submit, instead
+        of multi-line input where Enter = newline).
 
-        Unlike ``spawn``, this does NOT write to ``team_links`` — there's no
-        PR/issue to bind to.
+        Unlike ``spawn``, this does NOT write to ``team_links``.
         """
         if not initial_prompt or not initial_prompt.strip():
             raise ValueError("initial_prompt must not be empty")
@@ -114,17 +115,24 @@ class AgentSpawner:
             capture_output=True, text=True,
         )
 
-        # Build bootstrap prompt and send literally
+        # PR-19e: give claude TUI ~2.5s to initialize before pasting
+        # (claude shows splash + spawns sub-procs; pasting too early gets
+        # eaten by the pre-ready buffer).
+        import time as _time
+        _time.sleep(2.5)
+
+        # Build bootstrap prompt
         bootstrap_path = Path(__file__).parent / "freeform_bootstrap.txt"
         bootstrap_template = bootstrap_path.read_text(encoding="utf-8")
         bootstrap_text = bootstrap_template.replace(
             "{{INITIAL_PROMPT}}", initial_prompt.strip()
         )
 
-        from tmux_pane import send_keys_text
-        # Pass subprocess.run explicitly so test patches on agent_spawn.subprocess.run
-        # propagate (tmux_pane's default runner captures subprocess.run at def time).
-        send_keys_text(team_id, bootstrap_text, append_enter=True, runner=subprocess.run)
+        # PR-19e: paste via set-buffer + paste-buffer (bracketed-paste); separate
+        # Enter submits the paste. send-keys -l would have made each \n a newline
+        # in claude's multi-line input and never submitted.
+        from tmux_pane import paste_buffer_to_pane
+        paste_buffer_to_pane(team_id, bootstrap_text, append_enter=True, runner=subprocess.run)
 
         return {
             "team_id": team_id,

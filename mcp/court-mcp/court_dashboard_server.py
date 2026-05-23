@@ -25,7 +25,7 @@ from aiohttp import web
 from agent_spawn import AgentSpawner, SpawnError
 from agent_teams import AgentTeamAggregator
 # PR-19b-1: freeform agent helpers
-from tmux_pane import capture_pane, send_keys_text, TmuxPaneError
+from tmux_pane import capture_pane, send_keys_text, paste_buffer_to_pane, TmuxPaneError
 from dashboard_aggregator import (
     CACHE_TTL_SECONDS,
     DashboardAggregator,
@@ -45,7 +45,7 @@ SSE_KEEPALIVE_SECONDS = 30
 FRONTEND_DIST_DIRNAME = "frontend/dist"
 
 # PR-19b-3: pane SSE stream
-PANE_STREAM_TICK_SEC = 1.0
+PANE_STREAM_TICK_SEC = 0.2  # PR-19e: 1.0 → 0.2 让 claude 流式输出在前端看着流畅
 PANE_STREAM_KEEPALIVE_SEC = 25.0
 PANE_STREAM_LINES = 500
 
@@ -524,17 +524,31 @@ async def handle_agent_input(request: web.Request) -> web.Response:
         return web.json_response({"error": "text is required"}, status=400)
 
     append_enter = bool(body.get("append_enter", True))
+    # PR-19e: 客户端可显式选 paste 还是 send-keys; 默认按内容判:
+    # multi-line text 必须走 paste-buffer (避免 TUI 把 \n 当 newline 不 submit)
+    mode_raw = body.get("mode")
+    if mode_raw == "paste":
+        use_paste = True
+    elif mode_raw == "keys":
+        use_paste = False
+    else:
+        use_paste = "\n" in text
 
     try:
-        await asyncio.to_thread(
-            send_keys_text, team_id, text, append_enter=append_enter,
-        )
+        if use_paste:
+            await asyncio.to_thread(
+                paste_buffer_to_pane, team_id, text, append_enter=append_enter,
+            )
+        else:
+            await asyncio.to_thread(
+                send_keys_text, team_id, text, append_enter=append_enter,
+            )
     except TmuxPaneError as exc:
         return web.json_response({"error": str(exc)}, status=500)
     except Exception as exc:
         return web.json_response({"error": str(exc)}, status=500)
 
-    return web.json_response({"team_id": team_id, "ok": True})
+    return web.json_response({"team_id": team_id, "ok": True, "mode": "paste" if use_paste else "keys"})
 
 
 async def handle_agent_summary(request: web.Request) -> web.Response:
