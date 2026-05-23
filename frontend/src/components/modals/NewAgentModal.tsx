@@ -19,6 +19,9 @@ const SENTINEL_REQ_READY = '### REQ READY ###';
 const SENTINEL_PLAN_READY = '### PLAN READY ###';
 const SENTINEL_EXECUTE_START = '### EXECUTE START ###';
 const SENTINEL_EXECUTE_DONE = '### EXECUTE DONE ###';
+// PR-19b-4: progress + error sentinels
+const TASK_DONE_RE = /^###\s*TASK DONE:\s*(.+?)\s*###\s*$/gm;
+const ERROR_RE = /^###\s*ERROR:\s*(.+?)\s*###\s*$/gm;
 
 interface PaneSignals {
   reqReady: boolean;
@@ -27,6 +30,10 @@ interface PaneSignals {
   executeDone: boolean;
   /** Last markdown fenced block found, or null. */
   planMarkdown: string | null;
+  /** PR-19b-4: 已完成的 task 名列表 (按 pane 出现顺序去重) */
+  tasksDone: string[];
+  /** PR-19b-4: 最后一条 ### ERROR: ... ### 消息, 或 null */
+  errorMessage: string | null;
 }
 
 function parsePaneSignals(content: string): PaneSignals {
@@ -45,7 +52,31 @@ function parsePaneSignals(content: string): PaneSignals {
     planMarkdown = m[1];
   }
 
-  return { reqReady, planReady, executeStarted, executeDone, planMarkdown };
+  // PR-19b-4: collect all `### TASK DONE: <name> ###` lines (order-preserving dedupe)
+  const tasksDone: string[] = [];
+  const seen = new Set<string>();
+  let tm: RegExpExecArray | null;
+  TASK_DONE_RE.lastIndex = 0;
+  while ((tm = TASK_DONE_RE.exec(content)) !== null) {
+    const name = tm[1].trim();
+    if (name && !seen.has(name)) {
+      seen.add(name);
+      tasksDone.push(name);
+    }
+  }
+
+  // PR-19b-4: last `### ERROR: <msg> ###` wins
+  let errorMessage: string | null = null;
+  ERROR_RE.lastIndex = 0;
+  let em: RegExpExecArray | null;
+  while ((em = ERROR_RE.exec(content)) !== null) {
+    errorMessage = em[1].trim();
+  }
+
+  return {
+    reqReady, planReady, executeStarted, executeDone, planMarkdown,
+    tasksDone, errorMessage,
+  };
 }
 
 export function NewAgentModal({ open, onClose, onSpawned }: Props) {
@@ -70,6 +101,8 @@ export function NewAgentModal({ open, onClose, onSpawned }: Props) {
     executeStarted: false,
     executeDone: false,
     planMarkdown: null,
+    tasksDone: [],
+    errorMessage: null,
   });
   const [proceeding, setProceeding] = useState(false);
 
@@ -91,6 +124,8 @@ export function NewAgentModal({ open, onClose, onSpawned }: Props) {
       executeStarted: false,
       executeDone: false,
       planMarkdown: null,
+      tasksDone: [],
+      errorMessage: null,
     });
     setProceeding(false);
   }, [open]);
@@ -258,6 +293,15 @@ export function NewAgentModal({ open, onClose, onSpawned }: Props) {
           </button>
         </div>
 
+        {/* PR-19b-4: ### ERROR ### sentinel 红色 banner (任意 step 展示) */}
+        {signals.errorMessage && (
+          <div className="mx-5 mt-3 rounded-md bg-accent-danger/10 border border-accent-danger/30
+                          text-accent-danger text-xs px-3 py-2 leading-snug">
+            <span className="font-medium">{t('agents.modal.agent_error_label')}</span>{' '}
+            <code className="font-mono break-all">{signals.errorMessage}</code>
+          </div>
+        )}
+
         {/* Body */}
         <div className="flex-1 min-h-0 overflow-y-auto p-5">
           {step === 1 ? (
@@ -360,12 +404,21 @@ export function NewAgentModal({ open, onClose, onSpawned }: Props) {
           ) : (
             // step === 4 — same pane view as Step 2, but read-only (no input)
             <div className="flex flex-col gap-2 h-[60vh]">
-              <div className="text-[11px] text-fg-muted flex items-center gap-2">
+              <div className="text-[11px] text-fg-muted flex items-center gap-2 flex-wrap">
                 <span>team: <code className="text-fg-secondary">{teamId}</code></span>
                 {signals.executeDone ? (
                   <span className="text-accent-success">✓ {t('agents.modal.step4_done')}</span>
                 ) : (
                   <span className="text-accent-warn">{t('agents.modal.step4_running')}</span>
+                )}
+                {/* PR-19b-4: 任务计数 + 最后完成的 task 名 */}
+                {signals.tasksDone.length > 0 && (
+                  <span className="text-accent-primary inline-flex items-center gap-1">
+                    {t('agents.modal.step4_tasks_done', { count: signals.tasksDone.length })}
+                    <code className="text-fg-secondary truncate max-w-[280px]">
+                      {signals.tasksDone[signals.tasksDone.length - 1]}
+                    </code>
+                  </span>
                 )}
                 {paneError && <span className="text-accent-danger">⚠ {paneError}</span>}
               </div>
