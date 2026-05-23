@@ -101,6 +101,8 @@ def create_app(
     app.router.add_get("/api/agent/{team_id}/pane/stream", handle_agent_pane_stream)
     app.router.add_get("/api/agent/{team_id}/pane", handle_agent_pane)
     app.router.add_post("/api/agent/{team_id}/input", handle_agent_input)
+    # PR-19c-2: AI summary of pane content
+    app.router.add_get("/api/agent/{team_id}/summary", handle_agent_summary)
     app.router.add_get("/api/events", handle_events)
     app.router.add_get("/api/auto-review/status", auto_review_status_handler)
     app.router.add_post("/api/approve", handle_approve)
@@ -533,6 +535,42 @@ async def handle_agent_input(request: web.Request) -> web.Response:
         return web.json_response({"error": str(exc)}, status=500)
 
     return web.json_response({"team_id": team_id, "ok": True})
+
+
+async def handle_agent_summary(request: web.Request) -> web.Response:
+    """GET /api/agent/{team_id}/summary — AI one-line summary of pane content.
+
+    PR-19c-2: 30s 内存缓存; tmux:* 类型走 codex/claude CLI 摘要; ghostty:* 类型
+    立即返 sentinel 'ghostty-no-capture'. team_id 兼容 'tmux:agent-team-xxx' /
+    'ghostty:ttys025' / 'agent-team-xxx' 三种 (前端 AgentTeam.id 是带前缀的).
+    """
+    raw = request.match_info.get("team_id", "")
+    if not raw:
+        return web.json_response({"error": "team_id is required"}, status=400)
+    # 前端 AgentTeam.id 是 "tmux:agent-team-xxx" / "ghostty:ttys025"; 后端 summary
+    # 只关心 agent-team-* 实际能 capture; 把前缀剥掉再判.
+    if raw.startswith("tmux:"):
+        team_id = raw[len("tmux:"):]
+    else:
+        team_id = raw
+
+    force_refresh = request.query.get("force") in ("1", "true", "yes")
+
+    try:
+        from agent_summary import get_summary
+        result = await asyncio.to_thread(
+            get_summary, team_id, force_refresh=force_refresh,
+        )
+    except Exception as exc:
+        return web.json_response({"error": str(exc)}, status=500)
+
+    return web.json_response({
+        "team_id": raw,  # echo 原 id 给前端
+        "summary": result.summary,
+        "sentinel": result.sentinel,
+        "error": result.error,
+        "captured_at": result.captured_at,
+    })
 
 
 # ---------------------------------------------------------------------------
