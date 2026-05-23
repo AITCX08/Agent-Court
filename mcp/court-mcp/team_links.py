@@ -84,3 +84,30 @@ class TeamLinks:
 
     def list_by_team(self) -> dict[str, dict[str, Any]]:
         return {k: dict(v) for k, v in self._by_team.items()}
+
+    def cleanup_orphans(self, live_sessions: set[str]) -> list[str]:
+        """PR-19c-1: 删除 tmux session 已不存在的孤儿 link.
+
+        ``live_sessions`` 是当前 tmux 实际存在的 session 名集合
+        (`tmux list-sessions -F "#{session_name}"` 输出).
+        团队 ID 以 ``agent-team-`` 开头但不在 live_sessions 里的, 视为孤儿.
+
+        其他来源的 link (比如未来 ghostty 直接挂的) 不动 — 只清以
+        ``agent-team-`` 前缀的 dashboard-spawned tmux session.
+
+        Returns 清掉的 team_id 列表.
+        """
+        orphans = [
+            team_id for team_id in list(self._by_team.keys())
+            if team_id.startswith("agent-team-") and team_id not in live_sessions
+        ]
+        for team_id in orphans:
+            record = self._by_team.pop(team_id, None)
+            if record is not None:
+                self._by_target.pop(
+                    _target_key(record["kind"], record["repo"], record["number"]),
+                    None,
+                )
+        if orphans:
+            self._save()
+        return orphans

@@ -79,6 +79,10 @@ class AgentTeamAggregator:
         labels = self._load_labels()
         ghostty_teams = self._collect_ghostty(labels)
         tmux_teams = self._collect_tmux(labels)
+        # PR-19c-1: 拿 live tmux session 集合, 清掉 team_links 里 agent-team-*
+        # 但 tmux 已不在的孤儿 link (防止看板 Bot 按钮指向死 team).
+        live_sessions = {t.session for t in tmux_teams if t.session}
+        self.team_links.cleanup_orphans(live_sessions)
         # PR-17b: 给 tmux team 附 linked (从 team_links 反查).
         # team_links 用原始 session 名作 key (agent_spawn.py 落的格式), 跟
         # AgentTeam.id 的 "tmux:" 前缀不一致, 所以这里用 team.session lookup.
