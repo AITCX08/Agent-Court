@@ -24,6 +24,8 @@ from aiohttp import web
 
 from agent_spawn import AgentSpawner, SpawnError
 from agent_teams import AgentTeamAggregator
+# PR-19b-1: freeform agent helpers
+from tmux_pane import capture_pane, send_keys_text, TmuxPaneError
 from dashboard_aggregator import (
     CACHE_TTL_SECONDS,
     DashboardAggregator,
@@ -89,6 +91,10 @@ def create_app(
     app.router.add_post("/api/agent/team-label", handle_agent_team_label)
     app.router.add_post("/api/agent/spawn", handle_agent_spawn)
     app.router.add_delete("/api/agent/{team_id}", handle_agent_kill)
+    # PR-19b-1: freeform agent endpoints
+    app.router.add_post("/api/agent/freeform-spawn", handle_agent_freeform_spawn)
+    app.router.add_get("/api/agent/{team_id}/pane", handle_agent_pane)
+    app.router.add_post("/api/agent/{team_id}/input", handle_agent_input)
     app.router.add_get("/api/events", handle_events)
     app.router.add_get("/api/auto-review/status", auto_review_status_handler)
     app.router.add_post("/api/approve", handle_approve)
@@ -338,6 +344,121 @@ async def handle_agent_kill(request: web.Request) -> web.Response:
     # invalidate git_board cache so linked_team disappears
     request.app["git_board"].invalidate()
     return web.json_response(result)
+
+
+# ---------------------------------------------------------------------------
+# PR-19b-1: freeform agent endpoints (no PR/issue binding)
+# ---------------------------------------------------------------------------
+
+_AGENT_TEAM_PREFIX = "agent-team-"
+
+
+def _validate_team_id(team_id: str) -> str | None:
+    """Return error message if team_id invalid, else None.
+
+    Guards against the dashboard poking arbitrary tmux sessions that weren't
+    spawned by AgentSpawner.
+    """
+    if not team_id or not team_id.startswith(_AGENT_TEAM_PREFIX):
+        return f"invalid team_id (must start with {_AGENT_TEAM_PREFIX!r})"
+    return None
+
+
+async def handle_agent_freeform_spawn(request: web.Request) -> web.Response:
+    """POST /api/agent/freeform-spawn — start a no-PR/issue agent team.
+
+    Body: {"label": str, "initial_prompt": str}
+    Returns the raw spawn_freeform result (team_id / session / label / linked / already_spawned).
+    """
+    body = await _read_json(request)
+    if not isinstance(body, dict):
+        return web.json_response({"error": "invalid JSON body"}, status=400)
+
+    label_raw = body.get("label")
+    prompt_raw = body.get("initial_prompt")
+    label = (label_raw or "").strip() if isinstance(label_raw, str) else ""
+    initial_prompt = (prompt_raw or "").strip() if isinstance(prompt_raw, str) else ""
+
+    if not label:
+        return web.json_response({"error": "label is required"}, status=400)
+    if not initial_prompt:
+        return web.json_response({"error": "initial_prompt is required"}, status=400)
+
+    spawner: AgentSpawner = request.app["agent_spawner"]
+    try:
+        result = await asyncio.to_thread(
+            spawner.spawn_freeform, label=label, initial_prompt=initial_prompt,
+        )
+    except Exception as exc:  # SpawnError or other backend failures
+        return web.json_response({"error": str(exc)}, status=500)
+
+    return web.json_response(result)
+
+
+async def handle_agent_pane(request: web.Request) -> web.Response:
+    """GET /api/agent/{team_id}/pane?lines=1000 — capture pane content."""
+    team_id = request.match_info.get("team_id", "")
+    err = _validate_team_id(team_id)
+    if err:
+        return web.json_response({"error": err}, status=400)
+
+    lines_raw = request.query.get("lines", "1000")
+    try:
+        lines = int(lines_raw)
+    except (TypeError, ValueError):
+        return web.json_response({"error": "lines must be int"}, status=400)
+    if lines <= 0 or lines > 10000:
+        return web.json_response({"error": "lines must be in 1..10000"}, status=400)
+
+    try:
+        content = await asyncio.to_thread(capture_pane, team_id, lines=lines)
+    except TmuxPaneError as exc:
+        return web.json_response({"error": str(exc)}, status=500)
+    except Exception as exc:
+        return web.json_response({"error": str(exc)}, status=500)
+
+    from datetime import datetime, timezone
+    captured_at = (
+        datetime.now(timezone.utc)
+        .replace(microsecond=0)
+        .isoformat()
+        .replace("+00:00", "Z")
+    )
+    return web.json_response({
+        "team_id": team_id,
+        "content": content,
+        "captured_at": captured_at,
+    })
+
+
+async def handle_agent_input(request: web.Request) -> web.Response:
+    """POST /api/agent/{team_id}/input — send a text payload into the pane."""
+    team_id = request.match_info.get("team_id", "")
+    err = _validate_team_id(team_id)
+    if err:
+        return web.json_response({"error": err}, status=400)
+
+    body = await _read_json(request)
+    if not isinstance(body, dict):
+        return web.json_response({"error": "invalid JSON body"}, status=400)
+
+    text_raw = body.get("text")
+    text = text_raw if isinstance(text_raw, str) else ""
+    if not text.strip():
+        return web.json_response({"error": "text is required"}, status=400)
+
+    append_enter = bool(body.get("append_enter", True))
+
+    try:
+        await asyncio.to_thread(
+            send_keys_text, team_id, text, append_enter=append_enter,
+        )
+    except TmuxPaneError as exc:
+        return web.json_response({"error": str(exc)}, status=500)
+    except Exception as exc:
+        return web.json_response({"error": str(exc)}, status=500)
+
+    return web.json_response({"team_id": team_id, "ok": True})
 
 
 # ---------------------------------------------------------------------------
