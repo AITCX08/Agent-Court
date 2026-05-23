@@ -319,3 +319,31 @@ def test_parallel_job_guard_allows_after_active_finishes():
     final = d.process_one(t2)
 
     assert final == TaskState.POSTED.value
+
+
+def test_dispatcher_treats_duplicate_skipped_as_posted():
+    """post_review 返 {skipped:True} 时, dispatcher 仍标 POSTED, 记 dup-note."""
+    store = StateStore(":memory:")
+    task = _enqueue_pr(store)
+    client = _client_for_pr(changed_files=3)
+    # list_issue_comments 返一个已经有的相同 review comment
+    from auto_review.poster import format_review_comment
+    from auto_review.executor import ReviewResult
+    pre_existing_body = format_review_comment(
+        task,
+        ReviewResult(success=True, runtime="codex", output="REVIEW BODY", error=None),
+    )
+    client.list_issue_comments.return_value = [{"id": 555, "body": pre_existing_body}]
+
+    light = _fake_light()  # returns ReviewResult(success=True, runtime="codex", output="REVIEW BODY")
+    d = ReviewDispatcher(cfg=_cfg(), store=store, client=client,
+                        light=light, deep=_fake_deep())
+
+    final = d.process_one(task)
+
+    assert final == TaskState.POSTED.value
+    refreshed = store.get_by_dedupe_key(task.dedupe_key)
+    assert refreshed.state == TaskState.POSTED
+    assert "duplicate-skipped" in (refreshed.error_message or "")
+    assert "555" in (refreshed.error_message or "")
+    client.comment_on_issue.assert_not_called()

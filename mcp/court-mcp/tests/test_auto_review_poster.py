@@ -88,3 +88,52 @@ def test_post_review_propagates_client_exception():
 
     with pytest.raises(RuntimeError, match="gitea 500"):
         post_review(client=client, task=_task(), review=_review())
+
+
+def test_post_review_skips_when_duplicate_body_exists():
+    """同 body 已经有 comment → 返 skipped, 不再 post."""
+    client = MagicMock()
+    # build a body that matches what format_review_comment will produce
+    task = _task()
+    review = _review(output="## Looks good\nNo issues.")
+    from auto_review.poster import format_review_comment
+    expected_body = format_review_comment(task, review)
+    client.list_issue_comments.return_value = [
+        {"id": 100, "body": expected_body},
+    ]
+
+    result = post_review(client=client, task=task, review=review)
+
+    assert result.get("skipped") is True
+    assert result.get("reason") == "duplicate"
+    assert result.get("existing_comment_id") == 100
+    client.comment_on_issue.assert_not_called()
+
+
+def test_post_review_normalizes_whitespace_for_dedupe():
+    """body 多余空白/换行 不应阻止 dedupe."""
+    client = MagicMock()
+    task = _task()
+    review = _review(output="## Looks good\nNo issues.")
+    from auto_review.poster import format_review_comment
+    canonical = format_review_comment(task, review)
+    # 给已存在的 comment 加多余空白
+    munged = canonical.replace("\n", "  \n  ").replace(" · ", "  ·  ")
+    client.list_issue_comments.return_value = [{"id": 7, "body": munged}]
+
+    result = post_review(client=client, task=task, review=review)
+
+    assert result.get("skipped") is True
+    assert result.get("existing_comment_id") == 7
+
+
+def test_post_review_list_comments_failure_falls_back_to_post():
+    """list_issue_comments 报错 → 不阻断, 仍 comment_on_issue."""
+    client = MagicMock()
+    client.list_issue_comments.side_effect = RuntimeError("gitea 500")
+    client.comment_on_issue.return_value = {"id": 999}
+
+    result = post_review(client=client, task=_task(), review=_review())
+
+    assert result == {"id": 999}
+    client.comment_on_issue.assert_called_once()
