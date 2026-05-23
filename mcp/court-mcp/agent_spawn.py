@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import subprocess
 import uuid
+from pathlib import Path
 from typing import Any
 
 from team_links import TeamLinks
@@ -81,6 +82,56 @@ class AgentSpawner:
             "session": team_id,
             "already_spawned": False,
             "linked": {"repo": repo, "number": number, "kind": kind, "url": url},
+        }
+
+    def spawn_freeform(self, *, label: str, initial_prompt: str) -> dict[str, Any]:
+        """Spawn a freeform agent team — no PR/issue binding (PR-19b-1).
+
+        Reads ``freeform_bootstrap.txt`` (a protocol prompt explaining the
+        /req → superpowers brainstorming → writing-plans → wait /proceed →
+        executing-plans flow), substitutes ``{{INITIAL_PROMPT}}`` with the
+        user's text, and sends the whole thing into the new tmux session via
+        ``tmux_pane.send_keys_text`` (literal multi-line + Enter).
+
+        Unlike ``spawn``, this does NOT write to ``team_links`` — there's no
+        PR/issue to bind to.
+        """
+        if not initial_prompt or not initial_prompt.strip():
+            raise ValueError("initial_prompt must not be empty")
+
+        team_id = f"agent-team-{_generate_team_uuid()}"
+
+        new_args = ["tmux", "new-session", "-d", "-s", team_id]
+        if self.cwd:
+            new_args += ["-c", self.cwd]
+        proc = subprocess.run(new_args, capture_output=True, text=True)
+        if proc.returncode != 0:
+            raise SpawnError(f"tmux new-session failed: {proc.stderr.strip()}")
+
+        # Start claude inside the pane
+        subprocess.run(
+            ["tmux", "send-keys", "-t", team_id, "claude", "Enter"],
+            capture_output=True, text=True,
+        )
+
+        # Build bootstrap prompt and send literally
+        bootstrap_path = Path(__file__).parent / "freeform_bootstrap.txt"
+        bootstrap_template = bootstrap_path.read_text(encoding="utf-8")
+        bootstrap_text = bootstrap_template.replace(
+            "{{INITIAL_PROMPT}}", initial_prompt.strip()
+        )
+
+        from tmux_pane import send_keys_text
+        # Pass subprocess.run explicitly so test patches on agent_spawn.subprocess.run
+        # propagate (tmux_pane's default runner captures subprocess.run at def time).
+        send_keys_text(team_id, bootstrap_text, append_enter=True, runner=subprocess.run)
+
+        return {
+            "team_id": team_id,
+            "session": team_id,
+            "already_spawned": False,
+            "linked": None,
+            "label": label,
         }
 
     def kill(self, team_id: str) -> dict[str, Any]:
