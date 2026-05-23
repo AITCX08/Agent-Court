@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import logging
 import subprocess
+import time
 from dataclasses import dataclass
 from typing import Any, Callable, Protocol
 
@@ -56,8 +57,44 @@ def _build_prompt(task: AutoReviewTask, context: dict[str, Any]) -> str:
     )
 
 
+TRANSIENT_ERROR_PATTERNS = (
+    "command timed out",
+    "connect: operation timed out",
+    "connection timed out",
+    "read: connection reset by peer",
+    "connection reset by peer",
+    "no such host",
+    "network is unreachable",
+    "temporary failure",
+    "tls handshake timeout",
+    "i/o timeout",
+)
+_DEFAULT_RETRY_LIMIT = 3
+_DEFAULT_RETRY_BACKOFF_SEC = 2.0
+
+
+def _is_transient_error(text: str = "", exc: BaseException | None = None) -> bool:
+    """Match KAXY-3022/Agent-manager 21fa822 transient detection.
+
+    Checks both a free-form text blob (typically subprocess stderr) and an
+    exception message; returns True if any TRANSIENT_ERROR_PATTERNS substring
+    appears in either, case-insensitive.
+    """
+    haystack = (text or "").lower()
+    if exc is not None:
+        haystack += " " + str(exc).lower()
+    return any(p in haystack for p in TRANSIENT_ERROR_PATTERNS)
+
+
 class LightExecutor:
-    """Runs codex exec / claude CLI; stdout is the review markdown."""
+    """Runs codex exec / claude CLI; stdout is the review markdown.
+
+    PR-18g: transient-error retry. If stderr or exception message matches a
+    known network glitch pattern (timeout, connection reset, DNS, TLS handshake),
+    retry up to ``retry_limit`` times with linear backoff
+    (``retry_backoff_sec * attempt`` seconds between attempts). FileNotFoundError
+    (CLI not on PATH) is never retried — that's a config issue, not transient.
+    """
 
     def __init__(
         self,
@@ -66,49 +103,86 @@ class LightExecutor:
         claude_cmd: tuple[str, ...] = ("claude",),
         timeout_sec: int = 600,
         prefer: str = "codex",
+        retry_limit: int = _DEFAULT_RETRY_LIMIT,
+        retry_backoff_sec: float = _DEFAULT_RETRY_BACKOFF_SEC,
         runner: Callable[..., subprocess.CompletedProcess] = subprocess.run,
+        sleep: Callable[[float], None] = time.sleep,
     ):
         self._codex_cmd = list(codex_cmd)
         self._claude_cmd = list(claude_cmd)
         self._timeout = timeout_sec
         self._prefer = prefer
+        self._retry_limit = max(1, int(retry_limit))
+        self._retry_backoff = float(retry_backoff_sec)
         self._runner = runner
+        self._sleep = sleep
 
     def review(self, task: AutoReviewTask, context: dict[str, Any]) -> ReviewResult:
         argv = list(self._codex_cmd if self._prefer == "codex" else self._claude_cmd)
         prompt = _build_prompt(task, context)
-        try:
-            cp = self._runner(
-                argv,
-                input=prompt,
-                capture_output=True,
-                text=True,
-                timeout=self._timeout,
-            )
-        except subprocess.TimeoutExpired as exc:
+        last_error: str = "retry budget exhausted"
+
+        for attempt in range(1, self._retry_limit + 1):
+            try:
+                cp = self._runner(
+                    argv, input=prompt, capture_output=True,
+                    text=True, timeout=self._timeout,
+                )
+            except subprocess.TimeoutExpired:
+                # subprocess timeout is inherently transient (network glitch /
+                # upstream LLM slow) — always retry within the budget.
+                last_error = f"timeout after {self._timeout}s"
+                if attempt < self._retry_limit:
+                    _log.warning(
+                        "LightExecutor transient timeout, attempt %d/%d — retrying",
+                        attempt, self._retry_limit,
+                    )
+                    self._sleep(self._retry_backoff * attempt)
+                    continue
+                return ReviewResult(
+                    success=False, runtime=self._prefer, output="", error=last_error,
+                )
+            except FileNotFoundError as exc:
+                # CLI binary missing — not transient, fail immediately
+                return ReviewResult(
+                    success=False, runtime=self._prefer, output="",
+                    error=f"{argv[0]} not found on PATH: {exc}",
+                )
+            except Exception as exc:
+                last_error = f"{type(exc).__name__}: {exc}"
+                if attempt < self._retry_limit and _is_transient_error("", exc):
+                    _log.warning(
+                        "LightExecutor transient %s, attempt %d/%d — retrying",
+                        type(exc).__name__, attempt, self._retry_limit,
+                    )
+                    self._sleep(self._retry_backoff * attempt)
+                    continue
+                _log.exception("LightExecutor unexpected error")
+                return ReviewResult(
+                    success=False, runtime=self._prefer, output="", error=last_error,
+                )
+
+            if cp.returncode != 0:
+                stderr_text = (cp.stderr or "").strip()
+                last_error = f"exit {cp.returncode}: {stderr_text}"
+                if attempt < self._retry_limit and _is_transient_error(stderr_text):
+                    _log.warning(
+                        "LightExecutor transient stderr (exit %d), attempt %d/%d — retrying",
+                        cp.returncode, attempt, self._retry_limit,
+                    )
+                    self._sleep(self._retry_backoff * attempt)
+                    continue
+                return ReviewResult(
+                    success=False, runtime=self._prefer,
+                    output=cp.stdout or "", error=last_error,
+                )
+
             return ReviewResult(
-                success=False, runtime=self._prefer, output="",
-                error=f"timeout after {self._timeout}s",
-            )
-        except FileNotFoundError as exc:
-            return ReviewResult(
-                success=False, runtime=self._prefer, output="",
-                error=f"{argv[0]} not found on PATH: {exc}",
-            )
-        except Exception as exc:
-            _log.exception("LightExecutor unexpected error")
-            return ReviewResult(
-                success=False, runtime=self._prefer, output="",
-                error=f"{type(exc).__name__}: {exc}",
+                success=True, runtime=self._prefer, output=cp.stdout or "",
             )
 
-        if cp.returncode != 0:
-            return ReviewResult(
-                success=False, runtime=self._prefer, output=cp.stdout or "",
-                error=f"exit {cp.returncode}: {(cp.stderr or '').strip()}",
-            )
         return ReviewResult(
-            success=True, runtime=self._prefer, output=cp.stdout or "",
+            success=False, runtime=self._prefer, output="", error=last_error,
         )
 
 
