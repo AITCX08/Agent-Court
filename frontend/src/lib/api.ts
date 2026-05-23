@@ -339,15 +339,28 @@ export function sseUrl(): string {
 export interface AgentSummary {
   team_id: string;
   summary: string;
-  sentinel: 'ghostty-no-capture' | 'error' | null;
+  /** PR-19c-2 / PR-19d: sentinel 枚举随后端 agent_summary.py 演化 */
+  sentinel:
+    | 'ghostty-no-capture'  // 旧, PR-19c-2 时 ghostty 默认 sentinel
+    | 'ghostty-no-pid'      // PR-19d: 前端没传 pid
+    | 'ghostty-no-cwd'      // PR-19d: lsof 拿不到 cwd
+    | 'ghostty-no-session'  // PR-19d: ~/.claude/projects 下无对应 jsonl
+    | 'ghostty-no-content'  // PR-19d: jsonl 解析后内容空
+    | 'error'               // CLI 失败 / timeout / capture-pane 失败 等
+    | null;
   error: string | null;
   captured_at: number;
 }
 
-export function getAgentSummary(teamId: string, forceRefresh = false): Promise<AgentSummary> {
-  const q = forceRefresh ? '&force=1' : '';
+export function getAgentSummary(
+  teamId: string,
+  opts: { forceRefresh?: boolean; pid?: number | null } = {},
+): Promise<AgentSummary> {
+  const params: string[] = [`_=${Date.now()}`];
+  if (opts.forceRefresh) params.push('force=1');
+  if (opts.pid != null) params.push(`pid=${encodeURIComponent(String(opts.pid))}`);
   return call<AgentSummary>(
     'GET',
-    `/api/agent/${encodeURIComponent(teamId)}/summary?_=${Date.now()}${q}`,
+    `/api/agent/${encodeURIComponent(teamId)}/summary?${params.join('&')}`,
   );
 }

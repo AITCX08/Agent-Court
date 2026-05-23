@@ -53,7 +53,16 @@ export function AgentsPage() {
     return () => window.clearInterval(id);
   }, [fetch]);
 
-  const teams = snap?.teams ?? [];
+  const allTeams = snap?.teams ?? [];
+  // PR-19d: 按 kind 分组 (tab 切换)
+  type AgentTab = 'all' | 'tmux' | 'ghostty';
+  const [activeTab, setActiveTab] = useState<AgentTab>('all');
+  const tmuxTeams = allTeams.filter((tm) => tm.kind === 'tmux');
+  const ghosttyTeams = allTeams.filter((tm) => tm.kind === 'ghostty');
+  const teams =
+    activeTab === 'tmux' ? tmuxTeams :
+    activeTab === 'ghostty' ? ghosttyTeams :
+    allTeams;
 
   return (
     <div className="p-5 flex flex-col gap-4 min-h-full">
@@ -102,6 +111,30 @@ export function AgentsPage() {
               : <RefreshCw className="w-4 h-4" />}
           </button>
         </div>
+      </div>
+
+      {/* PR-19d: tab 行 — 全部 / Dashboard 启动 (tmux) / 本地终端 (ghostty) */}
+      <div className="flex items-center gap-1 border-b border-border-base">
+        {(
+          [
+            ['all', t('agents.tab_all'), allTeams.length],
+            ['tmux', t('agents.tab_tmux'), tmuxTeams.length],
+            ['ghostty', t('agents.tab_ghostty'), ghosttyTeams.length],
+          ] as const
+        ).map(([key, label, count]) => (
+          <button
+            key={key}
+            type="button"
+            onClick={() => setActiveTab(key as AgentTab)}
+            className={`text-xs px-3 py-1.5 -mb-px border-b-2 transition inline-flex items-center gap-1.5
+                       ${activeTab === key
+                         ? 'border-accent-primary text-fg-primary font-medium'
+                         : 'border-transparent text-fg-muted hover:text-fg-secondary'}`}
+          >
+            {label}
+            <span className="text-fg-muted text-[10px]">({count})</span>
+          </button>
+        ))}
       </div>
 
       {/* 错误 banner */}

@@ -54,7 +54,8 @@ export function AgentTeamCard({ team, onLabelSaved, onTeamKilled, highlighted }:
     const pull = async () => {
       setSummaryLoading(true);
       try {
-        const s = await getAgentSummary(team.id);
+        // PR-19d: ghostty 类型必传 pid, 后端用 lsof 查 cwd → claude jsonl
+        const s = await getAgentSummary(team.id, { pid: team.pid ?? null });
         if (!cancelled) setSummary(s);
       } catch {
         // 单卡失败不影响其他, 静默
@@ -70,14 +71,15 @@ export function AgentTeamCard({ team, onLabelSaved, onTeamKilled, highlighted }:
     };
   }, [team.id]);
 
-  // PR-19c-3: 渲染 summary 行的文案
+  // PR-19c-3 / PR-19d: 渲染 summary 行的文案
   const summaryText = (() => {
-    if (summary?.sentinel === 'ghostty-no-capture') {
-      return t('agents.card.summary_ghostty_hint');
-    }
-    if (summary?.sentinel === 'error') {
-      return t('agents.card.summary_error', { detail: summary.error || '' });
-    }
+    const s = summary?.sentinel;
+    if (s === 'ghostty-no-capture') return t('agents.card.summary_ghostty_hint');
+    if (s === 'ghostty-no-pid') return t('agents.card.summary_ghostty_no_pid');
+    if (s === 'ghostty-no-cwd') return t('agents.card.summary_ghostty_no_cwd');
+    if (s === 'ghostty-no-session') return t('agents.card.summary_ghostty_no_session');
+    if (s === 'ghostty-no-content') return t('agents.card.summary_ghostty_no_content');
+    if (s === 'error') return t('agents.card.summary_error', { detail: summary?.error || '' });
     if (summary?.summary) return summary.summary;
     if (summaryLoading) return t('agents.card.summary_loading');
     return t('agents.card.summary_pending');
