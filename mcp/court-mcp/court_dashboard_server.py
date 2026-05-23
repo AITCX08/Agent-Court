@@ -538,34 +538,40 @@ async def handle_agent_input(request: web.Request) -> web.Response:
 
 
 async def handle_agent_summary(request: web.Request) -> web.Response:
-    """GET /api/agent/{team_id}/summary — AI one-line summary of pane content.
+    """GET /api/agent/{team_id}/summary?pid=N — AI one-line summary.
 
-    PR-19c-2: 30s 内存缓存; tmux:* 类型走 codex/claude CLI 摘要; ghostty:* 类型
-    立即返 sentinel 'ghostty-no-capture'. team_id 兼容 'tmux:agent-team-xxx' /
-    'ghostty:ttys025' / 'agent-team-xxx' 三种 (前端 AgentTeam.id 是带前缀的).
+    PR-19c-2 / PR-19d: 30s 内存缓存.
+    - tmux: 类型走 tmux capture-pane → codex 摘要
+    - ghostty: 类型走 lsof(pid) → cwd → ~/.claude/projects/<cwd>/*.jsonl 最后几条
+      message → codex 摘要 (需要前端传 ?pid=N)
     """
     raw = request.match_info.get("team_id", "")
     if not raw:
         return web.json_response({"error": "team_id is required"}, status=400)
-    # 前端 AgentTeam.id 是 "tmux:agent-team-xxx" / "ghostty:ttys025"; 后端 summary
-    # 只关心 agent-team-* 实际能 capture; 把前缀剥掉再判.
     if raw.startswith("tmux:"):
         team_id = raw[len("tmux:"):]
     else:
         team_id = raw
 
     force_refresh = request.query.get("force") in ("1", "true", "yes")
+    pid_raw = request.query.get("pid", "")
+    pid: int | None = None
+    if pid_raw:
+        try:
+            pid = int(pid_raw)
+        except ValueError:
+            return web.json_response({"error": "pid must be int"}, status=400)
 
     try:
         from agent_summary import get_summary
         result = await asyncio.to_thread(
-            get_summary, team_id, force_refresh=force_refresh,
+            get_summary, team_id, pid=pid, force_refresh=force_refresh,
         )
     except Exception as exc:
         return web.json_response({"error": str(exc)}, status=500)
 
     return web.json_response({
-        "team_id": raw,  # echo 原 id 给前端
+        "team_id": raw,
         "summary": result.summary,
         "sentinel": result.sentinel,
         "error": result.error,
