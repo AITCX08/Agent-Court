@@ -5,6 +5,7 @@
     "no_items": "No items",
     "save": "Save",
     "cancel": "Cancel",
+    "close": "Close",
     "coming_soon": "Coming in next release",
     "error": "Error",
     "retry": "Retry"
@@ -100,7 +101,31 @@
       "stop_error": "Stop failed: {{detail}}"
     },
     "empty": "No agents running. Open claude in a ghostty tab and it appears within seconds.",
-    "fetch_error": "Failed to load agents: {{detail}}"
+    "fetch_error": "Failed to load agents: {{detail}}",
+    "new_agent_button": "Start New Agent",
+    "modal": {
+      "step1_title": "Start a New Agent",
+      "step2_title": "Chat with Agent",
+      "step_indicator": "({{current}}/{{total}})",
+      "step1_label_field": "Label (a short name to recognize later)",
+      "step1_label_placeholder": "e.g. Build an Excel export feature",
+      "step1_prompt_field": "Describe what you want (plain language)",
+      "step1_prompt_placeholder": "What do you want done? Goal, purpose, constraints. The agent will use /req to clarify before writing a plan.",
+      "step1_help": "The agent won't start coding right away — it'll first use /req to clarify your need, then write a plan. You'll approve the plan with a 'Go' button (added in a later PR) before execution begins.",
+      "step1_next": "Next",
+      "step2_pane_waiting": "Agent is starting... (output will appear here)",
+      "step2_input_placeholder": "Reply to the agent or refine your need (Cmd+Enter to send)",
+      "step2_send": "Send",
+      "step2_help": "Agent output refreshes every 3s. Step 3 (view plan) and Step 4 (execute) come in later PRs.",
+      "step2_close": "Close (agent keeps running)",
+      "step2_keep_running_hint": "Closing the modal won't stop the agent. You'll find it in the agents list afterwards.",
+      "empty_label": "Label is required",
+      "empty_prompt": "Initial requirement is required",
+      "empty_input": "Enter some text before sending",
+      "spawn_success": "Agent started: {{team}}",
+      "spawn_failed": "Failed to start agent: {{detail}}",
+      "send_failed": "Send failed: {{detail}}"
+    }
   },
   "court_runtime": {
     "subtitle": "Existing dashboard moved into this menu. Orchestrator health / pending approvals / watcher / receiver / tmux all live here."

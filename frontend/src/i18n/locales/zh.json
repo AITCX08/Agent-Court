@@ -5,6 +5,7 @@
     "no_items": "暂无内容",
     "save": "保存",
     "cancel": "取消",
+    "close": "关闭",
     "coming_soon": "下个版本上线",
     "error": "出错了",
     "retry": "重试"
@@ -100,7 +101,31 @@
       "stop_error": "终止失败: {{detail}}"
     },
     "empty": "目前没有跑着的 agent. 在 ghostty 里手动开 claude 后, 几秒内会自动出现.",
-    "fetch_error": "拉取 agent 列表失败: {{detail}}"
+    "fetch_error": "拉取 agent 列表失败: {{detail}}",
+    "new_agent_button": "启动新 Agent",
+    "modal": {
+      "step1_title": "启动新需求 Agent",
+      "step2_title": "跟 Agent 沟通",
+      "step_indicator": "({{current}}/{{total}})",
+      "step1_label_field": "任务标签 (随便取个短名字, 之后好认)",
+      "step1_label_placeholder": "比如: 做个导出 Excel 功能",
+      "step1_prompt_field": "用大白话描述你想做什么",
+      "step1_prompt_placeholder": "想做啥? 包括目标、用途、有啥限制. Agent 会拿这段先用 /req 跟你来回澄清, 再写实施计划.",
+      "step1_help": "Agent 不会一开始就动手 — 会先用 /req 跟你聊明白需求, 再写计划. 你审完计划再按 \"开工\" (后续 PR 加按钮) 才开始干.",
+      "step1_next": "下一步",
+      "step2_pane_waiting": "Agent 正在启动... (Agent 输出会出现在这里)",
+      "step2_input_placeholder": "回答 Agent 的问题或者补充需求 (Cmd+Enter 发送)",
+      "step2_send": "发送",
+      "step2_help": "Agent 输出每 3 秒刷新一次. Step 3 (查看计划) 和 Step 4 (执行) 在后续 PR 加.",
+      "step2_close": "关闭 (Agent 继续后台跑)",
+      "step2_keep_running_hint": "关闭弹窗不会停 Agent. 之后从 Agent 列表能再找到它.",
+      "empty_label": "请取个任务标签",
+      "empty_prompt": "请填具体需求",
+      "empty_input": "请输入内容再发送",
+      "spawn_success": "已启动 Agent: {{team}}",
+      "spawn_failed": "启动 Agent 失败: {{detail}}",
+      "send_failed": "发送失败: {{detail}}"
+    }
   },
   "court_runtime": {
     "subtitle": "现有 dashboard 收纳到此菜单. Orchestrator 健康 / 待审批 / Watcher / Receiver / Tmux 都在."

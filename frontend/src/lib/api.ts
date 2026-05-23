@@ -270,6 +270,47 @@ export function killAgent(teamId: string): Promise<{ ok: true; team_id: string; 
   return call('DELETE', `/api/agent/${encodeURIComponent(teamId)}`, { confirm: true });
 }
 
+// ---- PR-19b-1: freeform agent ----
+
+export interface FreeformSpawnResult {
+  team_id: string;
+  session: string;
+  label: string;
+  already_spawned: boolean;
+  linked: null;
+}
+
+export interface AgentPaneSnapshot {
+  team_id: string;
+  content: string;
+  captured_at: string;
+}
+
+export function spawnFreeformAgent(input: {
+  label: string;
+  initial_prompt: string;
+}): Promise<FreeformSpawnResult> {
+  return call<FreeformSpawnResult>('POST', '/api/agent/freeform-spawn', input);
+}
+
+export function getAgentPane(teamId: string, lines = 1000): Promise<AgentPaneSnapshot> {
+  return call<AgentPaneSnapshot>(
+    'GET',
+    `/api/agent/${encodeURIComponent(teamId)}/pane?lines=${lines}`,
+  );
+}
+
+export function sendAgentInput(
+  teamId: string,
+  text: string,
+  appendEnter = true,
+): Promise<{ team_id: string; ok: true }> {
+  return call('POST', `/api/agent/${encodeURIComponent(teamId)}/input`, {
+    text,
+    append_enter: appendEnter,
+  });
+}
+
 export function approve(
   pending: Pick<Pending, 'slug_id' | 'repo' | 'number' | 'stage'>,
   reason = ''

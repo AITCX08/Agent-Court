@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { AlertTriangle, RefreshCw, Loader2, Bot } from 'lucide-react';
+import { AlertTriangle, RefreshCw, Loader2, Bot, Plus } from 'lucide-react';
 import { getAgentTeams } from '../../lib/api';
 import { useStore } from '../../lib/store';
 import { AgentTeamCard } from '../agents/AgentTeamCard';
+import { NewAgentModal } from '../modals/NewAgentModal';
 
 const AUTO_REFRESH_MS = 5_000;
 
@@ -24,6 +25,8 @@ export function AgentsPage() {
   const [error, setError] = useState<string | null>(null);
   // PR-19a: 跳转高亮目标 team — hash 变化时重读
   const [focusTeamId, setFocusTeamId] = useState<string | null>(readFocusTeamFromHash);
+  // PR-19b-2: 启动新 agent modal 开关
+  const [modalOpen, setModalOpen] = useState(false);
 
   useEffect(() => {
     const onHashChange = () => setFocusTeamId(readFocusTeamFromHash());
@@ -71,20 +74,34 @@ export function AgentsPage() {
             </p>
           </div>
         </div>
-        <button
-          type="button"
-          onClick={fetch}
-          disabled={loading}
-          title={t('common.refresh')}
-          aria-label={t('common.refresh')}
-          className="w-8 h-8 inline-flex items-center justify-center rounded-md
-                     text-fg-secondary hover:text-fg-primary hover:bg-bg-card-hover
-                     transition disabled:opacity-40"
-        >
-          {loading
-            ? <Loader2 className="w-4 h-4 animate-spin" />
-            : <RefreshCw className="w-4 h-4" />}
-        </button>
+        <div className="flex items-center gap-2">
+          {/* PR-19b-2: 启动新 agent 按钮 */}
+          <button
+            type="button"
+            onClick={() => setModalOpen(true)}
+            className="text-xs px-3 py-1.5 rounded-md
+                       bg-accent-purple/15 text-accent-purple border border-accent-purple/30
+                       hover:bg-accent-purple/25 transition
+                       inline-flex items-center gap-1.5"
+          >
+            <Plus className="w-3.5 h-3.5" />
+            {t('agents.new_agent_button')}
+          </button>
+          <button
+            type="button"
+            onClick={fetch}
+            disabled={loading}
+            title={t('common.refresh')}
+            aria-label={t('common.refresh')}
+            className="w-8 h-8 inline-flex items-center justify-center rounded-md
+                       text-fg-secondary hover:text-fg-primary hover:bg-bg-card-hover
+                       transition disabled:opacity-40"
+          >
+            {loading
+              ? <Loader2 className="w-4 h-4 animate-spin" />
+              : <RefreshCw className="w-4 h-4" />}
+          </button>
+        </div>
       </div>
 
       {/* 错误 banner */}
@@ -118,6 +135,13 @@ export function AgentsPage() {
           ))}
         </div>
       )}
+
+      {/* PR-19b-2: 启动新 agent modal */}
+      <NewAgentModal
+        open={modalOpen}
+        onClose={() => setModalOpen(false)}
+        onSpawned={() => fetch()}
+      />
     </div>
   );
 }
