@@ -7,12 +7,29 @@ import { AgentTeamCard } from '../agents/AgentTeamCard';
 
 const AUTO_REFRESH_MS = 5_000;
 
+// PR-19a: 从 location.hash (#/agents?focus=<teamId>) 解析 focus 目标 team
+function readFocusTeamFromHash(): string | null {
+  const hash = window.location.hash || '';
+  const qIdx = hash.indexOf('?');
+  if (qIdx < 0) return null;
+  const params = new URLSearchParams(hash.slice(qIdx + 1));
+  return params.get('focus');
+}
+
 export function AgentsPage() {
   const { t } = useTranslation();
   const snap = useStore((s) => s.agentTeams);
   const setAgentTeams = useStore((s) => s.setAgentTeams);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // PR-19a: 跳转高亮目标 team — hash 变化时重读
+  const [focusTeamId, setFocusTeamId] = useState<string | null>(readFocusTeamFromHash);
+
+  useEffect(() => {
+    const onHashChange = () => setFocusTeamId(readFocusTeamFromHash());
+    window.addEventListener('hashchange', onHashChange);
+    return () => window.removeEventListener('hashchange', onHashChange);
+  }, []);
 
   const fetch = useCallback(async () => {
     setLoading(true);
@@ -91,7 +108,13 @@ export function AgentsPage() {
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
           {teams.map((team) => (
-            <AgentTeamCard key={team.id} team={team} onLabelSaved={fetch} onTeamKilled={fetch} />
+            <AgentTeamCard
+              key={team.id}
+              team={team}
+              onLabelSaved={fetch}
+              onTeamKilled={fetch}
+              highlighted={team.id === focusTeamId}
+            />
           ))}
         </div>
       )}

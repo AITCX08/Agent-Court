@@ -59,7 +59,11 @@
       "spawn_pending": "派单中...",
       "spawn_error": "派 Agent 失败: {{detail}}",
       "spawn_success": "已派给 Agent {{team}}",
-      "spawn_already": "已经派过, 跳到对应 Agent"
+      "spawn_already": "已经派过, 跳到对应 Agent",
+      "kill_agent": "关闭 Agent",
+      "kill_confirm_title": "关掉?",
+      "kill_confirm_yes": "确认",
+      "kill_confirm_no": "取消"
     },
     "issues_section": "Issues",
     "no_pr": "暂无 PR",

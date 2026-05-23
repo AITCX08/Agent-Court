@@ -106,8 +106,16 @@ export function GitBoardPage() {
     }
   };
 
-  const onJumpToTeam = (_teamId: string) => {
-    window.location.hash = '/agents';
+  const onJumpToTeam = (teamId: string) => {
+    // PR-19a: 传 teamId 让 AgentsPage 滚动 + 高亮目标卡片
+    window.location.hash = `/agents?focus=${encodeURIComponent(teamId)}`;
+  };
+
+  // PR-19a: 卡片侧 ✕ 关掉 agent 成功后, 后端 git_board.cache invalidated +
+  // 看板要重新拉一次 linked_team 才会清空成 spawn 按钮
+  const onTeamKilled = async () => {
+    await refreshGitBoard(scope);
+    await fetchFor(scope);
   };
 
   return (
@@ -171,6 +179,7 @@ export function GitBoardPage() {
               emptyText={t('git_board.no_pr')}
               onSpawnRequest={onSpawnRequest}
               onJumpToTeam={onJumpToTeam}
+              onTeamKilled={onTeamKilled}
             />
           ))}
         </div>
@@ -194,6 +203,7 @@ export function GitBoardPage() {
                 card={card}
                 onSpawnRequest={onSpawnRequest}
                 onJumpToTeam={onJumpToTeam}
+                onTeamKilled={onTeamKilled}
               />
             ))}
           </div>
