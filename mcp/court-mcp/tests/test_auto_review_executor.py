@@ -188,3 +188,71 @@ def test_deep_spawn_failure_returns_review_failure():
     assert result.success is False
     assert result.runtime == "team"
     assert "tmux new-session failed" in (result.error or "")
+
+
+def test_light_transient_timeout_retries_then_succeeds():
+    """第一次 TimeoutExpired (transient), 第二次成功."""
+    calls = {"n": 0}
+    def fake_runner(argv, **kwargs):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise subprocess.TimeoutExpired(cmd=argv, timeout=kwargs.get("timeout", 600))
+        return _ok_completed(stdout="OK on retry")
+    sleeps = []
+    ex = LightExecutor(
+        retry_limit=3, retry_backoff_sec=0.01,
+        runner=fake_runner, sleep=sleeps.append,
+    )
+    result = ex.review(_task(), _ctx())
+    assert result.success is True
+    assert "OK on retry" in result.output
+    assert calls["n"] == 2
+    assert len(sleeps) == 1  # 1 次 sleep 在第 1 次重试前
+
+
+def test_light_transient_stderr_retries():
+    """非零 exit + stderr 含 'connection reset by peer' → retry."""
+    calls = {"n": 0}
+    def fake_runner(argv, **kwargs):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return _fail_completed(stderr="error: read: connection reset by peer", code=1)
+        return _ok_completed(stdout="OK on retry")
+    ex = LightExecutor(
+        retry_limit=3, retry_backoff_sec=0.01,
+        runner=fake_runner, sleep=lambda s: None,
+    )
+    result = ex.review(_task(), _ctx())
+    assert result.success is True
+    assert calls["n"] == 2
+
+
+def test_light_non_transient_does_not_retry():
+    """普通 exit 2 (没 transient pattern) → 直接失败, 不重试."""
+    calls = {"n": 0}
+    def fake_runner(argv, **kwargs):
+        calls["n"] += 1
+        return _fail_completed(stderr="syntax error in prompt", code=2)
+    ex = LightExecutor(
+        retry_limit=3, retry_backoff_sec=0.01,
+        runner=fake_runner, sleep=lambda s: None,
+    )
+    result = ex.review(_task(), _ctx())
+    assert result.success is False
+    assert calls["n"] == 1  # 只调一次, 没重试
+
+
+def test_light_retry_limit_exhausted():
+    """3 次都 transient → 最终 ReviewResult.success=False."""
+    calls = {"n": 0}
+    def fake_runner(argv, **kwargs):
+        calls["n"] += 1
+        return _fail_completed(stderr="i/o timeout", code=124)
+    ex = LightExecutor(
+        retry_limit=3, retry_backoff_sec=0.01,
+        runner=fake_runner, sleep=lambda s: None,
+    )
+    result = ex.review(_task(), _ctx())
+    assert result.success is False
+    assert "i/o timeout" in (result.error or "")
+    assert calls["n"] == 3
