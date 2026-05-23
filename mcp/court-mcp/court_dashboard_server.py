@@ -44,6 +44,11 @@ VERSION = "pr-15"
 SSE_KEEPALIVE_SECONDS = 30
 FRONTEND_DIST_DIRNAME = "frontend/dist"
 
+# PR-19b-3: pane SSE stream
+PANE_STREAM_TICK_SEC = 1.0
+PANE_STREAM_KEEPALIVE_SEC = 25.0
+PANE_STREAM_LINES = 500
+
 _log = get_logger("dashboard-server")
 
 
@@ -93,6 +98,7 @@ def create_app(
     app.router.add_delete("/api/agent/{team_id}", handle_agent_kill)
     # PR-19b-1: freeform agent endpoints
     app.router.add_post("/api/agent/freeform-spawn", handle_agent_freeform_spawn)
+    app.router.add_get("/api/agent/{team_id}/pane/stream", handle_agent_pane_stream)
     app.router.add_get("/api/agent/{team_id}/pane", handle_agent_pane)
     app.router.add_post("/api/agent/{team_id}/input", handle_agent_input)
     app.router.add_get("/api/events", handle_events)
@@ -429,6 +435,74 @@ async def handle_agent_pane(request: web.Request) -> web.Response:
         "content": content,
         "captured_at": captured_at,
     })
+
+
+async def handle_agent_pane_stream(request: web.Request) -> web.StreamResponse:
+    """GET /api/agent/{team_id}/pane/stream — SSE stream of pane snapshots.
+
+    Connects → immediately push one initial snapshot.
+    Every PANE_STREAM_TICK_SEC: capture-pane, diff with last sent, push if changed.
+    Every PANE_STREAM_KEEPALIVE_SEC of no change: write a `:` comment line so
+    proxies don't time out the connection.
+    """
+    team_id = request.match_info.get("team_id", "")
+    err = _validate_team_id(team_id)
+    if err:
+        return web.json_response({"error": err}, status=400)
+
+    response = web.StreamResponse(
+        status=200,
+        reason="OK",
+        headers={
+            "Content-Type": "text/event-stream",
+            "Cache-Control": "no-cache, no-transform",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+    await response.prepare(request)
+
+    last_content: str | None = None
+    last_emit_time = 0.0
+    loop = asyncio.get_event_loop()
+
+    try:
+        while not request.transport.is_closing():
+            now = loop.time()
+            try:
+                content = await asyncio.to_thread(
+                    capture_pane, team_id, lines=PANE_STREAM_LINES,
+                )
+            except TmuxPaneError as exc:
+                # Pane gone (session killed) → send a final error event and stop
+                await _sse_send(response, {"error": str(exc), "team_id": team_id})
+                break
+            except Exception as exc:
+                await _sse_send(response, {"error": str(exc), "team_id": team_id})
+                break
+
+            if content != last_content:
+                from datetime import datetime, timezone
+                captured_at = (
+                    datetime.now(timezone.utc).replace(microsecond=0)
+                    .isoformat().replace("+00:00", "Z")
+                )
+                await _sse_send(response, {
+                    "team_id": team_id,
+                    "content": content,
+                    "captured_at": captured_at,
+                })
+                last_content = content
+                last_emit_time = now
+            elif now - last_emit_time >= PANE_STREAM_KEEPALIVE_SEC:
+                await response.write(b": keepalive\n\n")
+                last_emit_time = now
+
+            await asyncio.sleep(PANE_STREAM_TICK_SEC)
+    except (asyncio.CancelledError, ConnectionResetError):
+        pass
+
+    return response
 
 
 async def handle_agent_input(request: web.Request) -> web.Response:
