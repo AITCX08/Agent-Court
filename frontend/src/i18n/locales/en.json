@@ -98,7 +98,16 @@
       "stop_confirm_yes": "Stop",
       "stop_confirm_no": "Cancel",
       "stop_success": "Agent stopped",
-      "stop_error": "Stop failed: {{detail}}"
+      "stop_error": "Stop failed: {{detail}}",
+      "summary_label": "Doing:",
+      "summary_loading": "Generating...",
+      "summary_pending": "(not yet — refreshes within 30s)",
+      "summary_ghostty_hint": "Cannot read ghostty terminal contents; check the ghostty window directly",
+      "summary_error": "Summary failed: {{detail}}",
+      "view_terminal": "View terminal",
+      "view_terminal_title": "Terminal contents",
+      "view_terminal_loading": "Connecting to pane SSE stream...",
+      "view_terminal_ghostty_hint": "Ghostty terminals are private to the user. The dashboard cannot read their output. Please check the corresponding ghostty window directly."
     },
     "empty": "No agents running. Open claude in a ghostty tab and it appears within seconds.",
     "fetch_error": "Failed to load agents: {{detail}}",

@@ -98,7 +98,16 @@
       "stop_confirm_yes": "终止",
       "stop_confirm_no": "取消",
       "stop_success": "已终止 Agent",
-      "stop_error": "终止失败: {{detail}}"
+      "stop_error": "终止失败: {{detail}}",
+      "summary_label": "在干啥:",
+      "summary_loading": "正在生成...",
+      "summary_pending": "(还没拉到, 30 秒内会刷)",
+      "summary_ghostty_hint": "本地终端无法读取内容, 在 ghostty 窗口里看",
+      "summary_error": "总结失败: {{detail}}",
+      "view_terminal": "查看终端",
+      "view_terminal_title": "终端内容",
+      "view_terminal_loading": "正在连上 pane SSE 流...",
+      "view_terminal_ghostty_hint": "ghostty 终端是用户私有的, dashboard 无法读取它的输出内容. 请在对应的 ghostty 窗口里直接看 / 操作."
     },
     "empty": "目前没有跑着的 agent. 在 ghostty 里手动开 claude 后, 几秒内会自动出现.",
     "fetch_error": "拉取 agent 列表失败: {{detail}}",

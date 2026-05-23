@@ -333,3 +333,21 @@ export function sseUrl(): string {
   const token = getToken();
   return `/api/events${token ? `?t=${encodeURIComponent(token)}` : ''}`;
 }
+
+// ---- PR-19c-2: agent summary ----
+
+export interface AgentSummary {
+  team_id: string;
+  summary: string;
+  sentinel: 'ghostty-no-capture' | 'error' | null;
+  error: string | null;
+  captured_at: number;
+}
+
+export function getAgentSummary(teamId: string, forceRefresh = false): Promise<AgentSummary> {
+  const q = forceRefresh ? '&force=1' : '';
+  return call<AgentSummary>(
+    'GET',
+    `/api/agent/${encodeURIComponent(teamId)}/summary?_=${Date.now()}${q}`,
+  );
+}
