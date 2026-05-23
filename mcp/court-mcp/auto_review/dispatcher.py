@@ -130,7 +130,7 @@ class ReviewDispatcher:
             return TaskState.REVIEW_DONE.value
 
         try:
-            post_review(client=self._client, task=task, review=result)
+            post_result = post_review(client=self._client, task=task, review=result)
         except Exception as exc:
             _log.exception("post_review failed")
             self._store.update_state(
@@ -140,7 +140,16 @@ class ReviewDispatcher:
             )
             return TaskState.FAILED.value
 
+        # PR-18g: post_review may return {"skipped": True, ...} when an
+        # identical comment already exists on the PR/issue. Treat as POSTED
+        # (the comment IS on the PR — just by an earlier run) but record why
+        # in error_message for ops visibility.
+        dup_note = None
+        if isinstance(post_result, dict) and post_result.get("skipped"):
+            dup_note = f"duplicate-skipped: existing_comment_id={post_result.get('existing_comment_id')}"
+
         self._store.update_state(
             task.id, TaskState.POSTED, runtime=result.runtime,
+            error_message=dup_note,
         )
         return TaskState.POSTED.value
