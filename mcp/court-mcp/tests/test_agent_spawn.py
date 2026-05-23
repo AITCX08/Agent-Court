@@ -218,7 +218,7 @@ def test_spawn_freeform_creates_tmux_session_without_team_links(monkeypatch):
 
 
 def test_spawn_freeform_calls_tmux_new_session_then_claude(monkeypatch):
-    """tmux new-session → send-keys claude → send-keys 引导 prompt."""
+    """PR-19e: tmux new-session → send-keys claude → wait → set-buffer + paste-buffer + Enter."""
     from agent_spawn import AgentSpawner
     from team_links import TeamLinks
     from pathlib import Path
@@ -231,23 +231,31 @@ def test_spawn_freeform_calls_tmux_new_session_then_claude(monkeypatch):
 
     monkeypatch.setattr("agent_spawn.subprocess.run", fake_run)
     monkeypatch.setattr("agent_spawn._generate_team_uuid", lambda: "x1")
+    # PR-19e: skip the 2.5s claude-warmup sleep in tests
+    import time as _time_mod
+    monkeypatch.setattr(_time_mod, "sleep", lambda _: None)
 
     with tempfile.TemporaryDirectory() as td:
         spawner = AgentSpawner(team_links=TeamLinks(court_root=Path(td)))
         spawner.spawn_freeform(label="L", initial_prompt="P")
 
-    # 第 1 个 call: tmux new-session
+    # tmux new-session 是第 1 个 call
     assert calls[0][0:4] == ["tmux", "new-session", "-d", "-s"]
-    # 第 2 个 call: send-keys claude
+    # send-keys claude 第 2 个
     assert calls[1][0:3] == ["tmux", "send-keys", "-t"]
     assert "claude" in calls[1]
-    # 第 3 个 call 之后: send-keys -l <bootstrap> + send-keys Enter (走 tmux_pane.send_keys_text)
-    # 至少有一个 -l 标志的 call 含 bootstrap 内容
-    literal_calls = [c for c in calls if "-l" in c]
-    assert len(literal_calls) >= 1
-    combined_payload = " ".join(c[-1] for c in literal_calls)
-    assert "Freeform Agent Bootstrap" in combined_payload
-    assert "P" in combined_payload  # initial_prompt 被替换进去
+    # PR-19e: bootstrap 走 set-buffer + paste-buffer 而不是 send-keys -l
+    set_buf_calls = [c for c in calls if c[0:2] == ["tmux", "set-buffer"]]
+    paste_buf_calls = [c for c in calls if c[0:2] == ["tmux", "paste-buffer"]]
+    assert len(set_buf_calls) == 1, f"expected 1 set-buffer call, got {len(set_buf_calls)}"
+    assert len(paste_buf_calls) == 1, f"expected 1 paste-buffer call, got {len(paste_buf_calls)}"
+    # set-buffer 最后一个 arg = 实际投递的 text
+    payload = set_buf_calls[0][-1]
+    assert "Freeform Agent Bootstrap" in payload
+    assert "P" in payload  # initial_prompt 被替换进去
+    # Enter 提交 paste
+    enter_calls = [c for c in calls if c[0:2] == ["tmux", "send-keys"] and "Enter" in c]
+    assert len(enter_calls) >= 2  # 一个启 claude 一个提交 bootstrap
 
 
 def test_spawn_freeform_label_in_result():

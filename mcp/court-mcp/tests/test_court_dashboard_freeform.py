@@ -30,13 +30,15 @@ def app_factory(tmp_path, monkeypatch):
     - capture_mock: monkeypatches court_dashboard_server.capture_pane
     - send_keys_mock: monkeypatches court_dashboard_server.send_keys_text
     """
-    def _make(*, spawner_mock=None, capture_mock=None, send_keys_mock=None):
+    def _make(*, spawner_mock=None, capture_mock=None, send_keys_mock=None, paste_buffer_mock=None):
         state_dir = tmp_path / "gw"
         state_dir.mkdir(parents=True, exist_ok=True)
         if capture_mock is not None:
             monkeypatch.setattr("court_dashboard_server.capture_pane", capture_mock)
         if send_keys_mock is not None:
             monkeypatch.setattr("court_dashboard_server.send_keys_text", send_keys_mock)
+        if paste_buffer_mock is not None:
+            monkeypatch.setattr("court_dashboard_server.paste_buffer_to_pane", paste_buffer_mock)
         app = create_app(
             token=TOKEN,
             state_dir=state_dir,
@@ -188,9 +190,11 @@ async def test_pane_backend_failure(app_factory):
 # ---- POST /api/agent/{team_id}/input ----
 
 @pytest.mark.asyncio
-async def test_input_sends_text(app_factory):
+async def test_input_multiline_uses_paste_buffer(app_factory):
+    """PR-19e: multi-line text 走 paste-buffer (避免 claude TUI 把 \\n 当 newline)."""
     send = MagicMock()
-    app = app_factory(send_keys_mock=send)
+    paste = MagicMock()
+    app = app_factory(send_keys_mock=send, paste_buffer_mock=paste)
     async with TestClient(TestServer(app)) as client:
         resp = await client.post(
             _qt("/api/agent/agent-team-x1/input"),
@@ -200,15 +204,39 @@ async def test_input_sends_text(app_factory):
         assert resp.status == 200
         body = await resp.json()
         assert body["ok"] is True
-    send.assert_called_once_with(
+        assert body["mode"] == "paste"
+    paste.assert_called_once_with(
         "agent-team-x1", "hello\nmulti line", append_enter=True
     )
+    send.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_input_single_line_uses_send_keys(app_factory):
+    """单行 text 走 send-keys (paste 也行, 但 send-keys 更轻量)."""
+    send = MagicMock()
+    paste = MagicMock()
+    app = app_factory(send_keys_mock=send, paste_buffer_mock=paste)
+    async with TestClient(TestServer(app)) as client:
+        resp = await client.post(
+            _qt("/api/agent/agent-team-x1/input"),
+            data=json.dumps({"text": "hello world"}),
+            headers={"Content-Type": "application/json"},
+        )
+        assert resp.status == 200
+        body = await resp.json()
+        assert body["mode"] == "keys"
+    send.assert_called_once_with(
+        "agent-team-x1", "hello world", append_enter=True
+    )
+    paste.assert_not_called()
 
 
 @pytest.mark.asyncio
 async def test_input_append_enter_false(app_factory):
     send = MagicMock()
-    app = app_factory(send_keys_mock=send)
+    paste = MagicMock()
+    app = app_factory(send_keys_mock=send, paste_buffer_mock=paste)
     async with TestClient(TestServer(app)) as client:
         resp = await client.post(
             _qt("/api/agent/agent-team-q/input"),
