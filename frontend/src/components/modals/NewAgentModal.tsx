@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { X, ArrowRight, Send, Loader2 } from 'lucide-react';
-import { spawnFreeformAgent, getAgentPane, sendAgentInput } from '../../lib/api';
+import { X, ArrowRight, ArrowLeft, Send, Loader2 } from 'lucide-react';
+import { spawnFreeformAgent, sendAgentInput, getToken } from '../../lib/api';
 import { useToast } from '../Toast';
 
 interface Props {
@@ -11,10 +11,42 @@ interface Props {
   onSpawned?: (teamId: string) => void;
 }
 
-type Step = 1 | 2;
+type Step = 1 | 2 | 3 | 4;
 
-const POLL_INTERVAL_MS = 3_000;
-const PANE_LINES = 500;
+// PR-19b-3: SSE backend serves the latest 500 lines (PANE_STREAM_LINES const).
+// PR-19b-3: sentinel parser — detect agent's state transitions in pane content
+const SENTINEL_REQ_READY = '### REQ READY ###';
+const SENTINEL_PLAN_READY = '### PLAN READY ###';
+const SENTINEL_EXECUTE_START = '### EXECUTE START ###';
+const SENTINEL_EXECUTE_DONE = '### EXECUTE DONE ###';
+
+interface PaneSignals {
+  reqReady: boolean;
+  planReady: boolean;
+  executeStarted: boolean;
+  executeDone: boolean;
+  /** Last markdown fenced block found, or null. */
+  planMarkdown: string | null;
+}
+
+function parsePaneSignals(content: string): PaneSignals {
+  const reqReady = content.includes(SENTINEL_REQ_READY);
+  const planReady = content.includes(SENTINEL_PLAN_READY);
+  const executeStarted = content.includes(SENTINEL_EXECUTE_START);
+  const executeDone = content.includes(SENTINEL_EXECUTE_DONE);
+
+  // Extract the LAST ```markdown ... ``` fenced block from pane content.
+  // Agent protocol says exactly one such block per plan; we grab the last
+  // one to handle the case where pane scrollback contains an old draft.
+  let planMarkdown: string | null = null;
+  const re = /```markdown\s*\n([\s\S]*?)\n```/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(content)) !== null) {
+    planMarkdown = m[1];
+  }
+
+  return { reqReady, planReady, executeStarted, executeDone, planMarkdown };
+}
 
 export function NewAgentModal({ open, onClose, onSpawned }: Props) {
   const { t } = useTranslation();
@@ -31,6 +63,15 @@ export function NewAgentModal({ open, onClose, onSpawned }: Props) {
   const [paneError, setPaneError] = useState<string | null>(null);
   const [input, setInput] = useState('');
   const [sending, setSending] = useState(false);
+  // PR-19b-3: derived signals from pane content + /proceed handshake state
+  const [signals, setSignals] = useState<PaneSignals>({
+    reqReady: false,
+    planReady: false,
+    executeStarted: false,
+    executeDone: false,
+    planMarkdown: null,
+  });
+  const [proceeding, setProceeding] = useState(false);
 
   const paneScrollRef = useRef<HTMLPreElement | null>(null);
 
@@ -44,30 +85,63 @@ export function NewAgentModal({ open, onClose, onSpawned }: Props) {
     setPaneContent('');
     setPaneError(null);
     setInput('');
+    setSignals({
+      reqReady: false,
+      planReady: false,
+      executeStarted: false,
+      executeDone: false,
+      planMarkdown: null,
+    });
+    setProceeding(false);
   }, [open]);
 
-  // Step 2: poll pane every 3s while we have a teamId
+  // PR-19b-3: SSE pane stream (replaces 3s polling).
+  // Active for steps 2/3/4 once we have a teamId.
   useEffect(() => {
-    if (step !== 2 || !teamId) return;
-    let cancelled = false;
-    const poll = async () => {
+    if (!teamId) return;
+    if (step !== 2 && step !== 3 && step !== 4) return;
+
+    // EventSource doesn't support custom headers — we need to pass the token
+    // via query string. The dashboard's middleware accepts ?t=<token>.
+    const token = getToken();
+    const url = `/api/agent/${encodeURIComponent(teamId)}/pane/stream?t=${encodeURIComponent(token)}`;
+    const es = new EventSource(url);
+
+    es.onmessage = (ev) => {
       try {
-        const snap = await getAgentPane(teamId, PANE_LINES);
-        if (!cancelled) {
-          setPaneContent(snap.content);
+        const payload = JSON.parse(ev.data);
+        if (payload.error) {
+          setPaneError(String(payload.error));
+          return;
+        }
+        if (typeof payload.content === 'string') {
+          setPaneContent(payload.content);
           setPaneError(null);
         }
-      } catch (err) {
-        if (!cancelled) setPaneError((err as Error).message);
+      } catch {
+        // Malformed event — ignore (server should always send JSON)
       }
     };
-    poll();
-    const id = window.setInterval(poll, POLL_INTERVAL_MS);
+    es.onerror = () => {
+      // Browser auto-retries by default; set transient error indicator
+      setPaneError('connection lost (retrying...)');
+    };
     return () => {
-      cancelled = true;
-      window.clearInterval(id);
+      es.close();
     };
   }, [step, teamId]);
+
+  // PR-19b-3: update signals whenever pane content changes
+  useEffect(() => {
+    if (!paneContent) return;
+    const next = parsePaneSignals(paneContent);
+    setSignals(next);
+    // Auto-advance Step 3 → 4 when EXECUTE START appears (i.e. after /proceed)
+    setStep((cur) => {
+      if (cur === 3 && next.executeStarted) return 4;
+      return cur;
+    });
+  }, [paneContent]);
 
   // Auto-scroll pane to bottom on content change
   useEffect(() => {
@@ -128,18 +202,27 @@ export function NewAgentModal({ open, onClose, onSpawned }: Props) {
     try {
       await sendAgentInput(teamId, text);
       setInput('');
-      // 即时拉一次 pane 反映用户输入
-      try {
-        const snap = await getAgentPane(teamId, PANE_LINES);
-        setPaneContent(snap.content);
-      } catch {
-        // 静默 — 主流程不阻塞, 下次 poll 会刷
-      }
+      // SSE 会自动推下一帧 pane (1s tick), 不再主动拉一次
     } catch (err) {
       push({ kind: 'err', text: t('agents.modal.send_failed', { detail: (err as Error).message }) });
     } finally {
       setSending(false);
     }
+  };
+
+  // ---- Step 3 handler: send /proceed to start execution ----
+  const sendProceed = async () => {
+    if (!teamId) return;
+    setProceeding(true);
+    try {
+      await sendAgentInput(teamId, '/proceed');
+      // 不主动 setStep(4) — 等 ### EXECUTE START ### sentinel 到达 (signals useEffect 处理)
+    } catch (err) {
+      push({ kind: 'err', text: t('agents.modal.proceed_failed', { detail: (err as Error).message }) });
+      setProceeding(false);
+      return;
+    }
+    setProceeding(false);
   };
 
   return (
@@ -155,9 +238,12 @@ export function NewAgentModal({ open, onClose, onSpawned }: Props) {
         {/* Header */}
         <div className="flex items-center justify-between px-5 py-3 border-b border-border-base">
           <h2 className="text-sm font-semibold text-fg-primary">
-            {step === 1 ? t('agents.modal.step1_title') : t('agents.modal.step2_title')}
+            {step === 1 ? t('agents.modal.step1_title')
+              : step === 2 ? t('agents.modal.step2_title')
+              : step === 3 ? t('agents.modal.step3_title')
+              : t('agents.modal.step4_title')}
             <span className="ml-2 text-fg-muted text-xs font-normal">
-              {t('agents.modal.step_indicator', { current: step, total: 2 })}
+              {t('agents.modal.step_indicator', { current: step, total: 4 })}
             </span>
           </h2>
           <button
@@ -207,7 +293,7 @@ export function NewAgentModal({ open, onClose, onSpawned }: Props) {
                 {t('agents.modal.step1_help')}
               </p>
             </div>
-          ) : (
+          ) : step === 2 ? (
             <div className="flex flex-col gap-2 h-[60vh]">
               <div className="text-[11px] text-fg-muted flex items-center gap-2">
                 <span>team: <code className="text-fg-secondary">{teamId}</code></span>
@@ -257,6 +343,43 @@ export function NewAgentModal({ open, onClose, onSpawned }: Props) {
                 {t('agents.modal.step2_help')}
               </p>
             </div>
+          ) : step === 3 ? (
+            <div className="flex flex-col gap-3 h-[60vh]">
+              <div className="text-[11px] text-fg-muted flex items-center gap-2">
+                <span>team: <code className="text-fg-secondary">{teamId}</code></span>
+                <span className="text-accent-success">✓ {t('agents.modal.step3_plan_ready')}</span>
+              </div>
+              <pre className="flex-1 min-h-0 overflow-auto bg-bg-base border border-border-base rounded-md
+                             p-3 text-[11px] text-fg-secondary font-mono whitespace-pre-wrap leading-snug">
+                {signals.planMarkdown ?? t('agents.modal.step3_plan_missing')}
+              </pre>
+              <p className="text-[11px] text-fg-muted leading-relaxed">
+                {t('agents.modal.step3_help')}
+              </p>
+            </div>
+          ) : (
+            // step === 4 — same pane view as Step 2, but read-only (no input)
+            <div className="flex flex-col gap-2 h-[60vh]">
+              <div className="text-[11px] text-fg-muted flex items-center gap-2">
+                <span>team: <code className="text-fg-secondary">{teamId}</code></span>
+                {signals.executeDone ? (
+                  <span className="text-accent-success">✓ {t('agents.modal.step4_done')}</span>
+                ) : (
+                  <span className="text-accent-warn">{t('agents.modal.step4_running')}</span>
+                )}
+                {paneError && <span className="text-accent-danger">⚠ {paneError}</span>}
+              </div>
+              <pre
+                ref={paneScrollRef}
+                className="flex-1 min-h-0 overflow-auto bg-bg-base border border-border-base rounded-md
+                           p-3 text-[11px] text-fg-secondary font-mono whitespace-pre leading-snug"
+              >
+                {paneContent || t('agents.modal.step2_pane_waiting')}
+              </pre>
+              <p className="text-[11px] text-fg-muted">
+                {t('agents.modal.step4_help')}
+              </p>
+            </div>
           )}
         </div>
 
@@ -285,10 +408,73 @@ export function NewAgentModal({ open, onClose, onSpawned }: Props) {
                 {t('agents.modal.step1_next')}
               </button>
             </>
-          ) : (
+          ) : step === 2 ? (
             <>
               <span className="flex-1 text-[11px] text-fg-muted">
                 {t('agents.modal.step2_keep_running_hint')}
+              </span>
+              <button
+                type="button"
+                onClick={onClose}
+                className="text-xs px-3 py-1.5 rounded-md text-fg-muted
+                           hover:bg-bg-card-hover transition"
+              >
+                {t('agents.modal.step2_close')}
+              </button>
+              <button
+                type="button"
+                onClick={() => setStep(3)}
+                disabled={!signals.planReady}
+                title={!signals.planReady ? t('agents.modal.step2_next_disabled') : undefined}
+                className="text-xs px-3 py-1.5 rounded-md bg-accent-primary/15 text-accent-primary
+                           border border-accent-primary/30 hover:bg-accent-primary/25 transition
+                           disabled:opacity-40 disabled:cursor-not-allowed
+                           inline-flex items-center gap-1"
+              >
+                <ArrowRight className="w-3.5 h-3.5" />
+                {t('agents.modal.step2_next')}
+              </button>
+            </>
+          ) : step === 3 ? (
+            <>
+              <button
+                type="button"
+                onClick={() => setStep(2)}
+                disabled={proceeding}
+                className="text-xs px-3 py-1.5 rounded-md text-fg-muted
+                           hover:bg-bg-card-hover transition disabled:opacity-40
+                           inline-flex items-center gap-1"
+              >
+                <ArrowLeft className="w-3.5 h-3.5" />
+                {t('agents.modal.step3_back')}
+              </button>
+              <span className="flex-1"></span>
+              <button
+                type="button"
+                onClick={onClose}
+                className="text-xs px-3 py-1.5 rounded-md text-fg-muted
+                           hover:bg-bg-card-hover transition"
+              >
+                {t('common.close')}
+              </button>
+              <button
+                type="button"
+                onClick={sendProceed}
+                disabled={proceeding || !teamId}
+                className="text-xs px-3 py-1.5 rounded-md bg-accent-success/15 text-accent-success
+                           border border-accent-success/30 hover:bg-accent-success/25 transition
+                           disabled:opacity-40 inline-flex items-center gap-1"
+              >
+                {proceeding ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Send className="w-3.5 h-3.5" />}
+                {t('agents.modal.step3_proceed')}
+              </button>
+            </>
+          ) : (
+            <>
+              <span className="flex-1 text-[11px] text-fg-muted">
+                {signals.executeDone
+                  ? t('agents.modal.step4_done_hint')
+                  : t('agents.modal.step4_running_hint')}
               </span>
               <button
                 type="button"
@@ -297,7 +483,7 @@ export function NewAgentModal({ open, onClose, onSpawned }: Props) {
                            border border-accent-primary/30 hover:bg-accent-primary/25 transition
                            inline-flex items-center gap-1"
               >
-                {t('agents.modal.step2_close')}
+                {t('agents.modal.step4_close')}
               </button>
             </>
           )}
