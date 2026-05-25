@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Terminal, ServerCog, Pencil, Check, X, Cpu, ExternalLink, Square, Eye, Loader2, Send } from 'lucide-react';
+import { Terminal, ServerCog, Pencil, Check, X, Cpu, ExternalLink, Square, Eye, FileText, Loader2, Send } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import type { AgentTeam, AgentSummary } from '../../lib/api';
 import { setAgentTeamLabel, killAgent, getAgentSummary, sendAgentInput, getToken } from '../../lib/api';
 import { useToast } from '../Toast';
+import { ReportModal } from './ReportModal';
 
 /**
  * PR-19f: parse `(a)/(b)/(c)` 选项分组
@@ -103,6 +104,8 @@ export function AgentTeamCard({ team, onLabelSaved, onTeamKilled, highlighted }:
   const [summaryLoading, setSummaryLoading] = useState(false);
   // PR-19c-3: view-terminal modal
   const [viewerOpen, setViewerOpen] = useState(false);
+  // PR-20b: view-report modal
+  const [reportOpen, setReportOpen] = useState(false);
 
   const isGhostty = team.kind === 'ghostty';
   const KindIcon = isGhostty ? Terminal : ServerCog;
@@ -346,22 +349,38 @@ export function AgentTeamCard({ team, onLabelSaved, onTeamKilled, highlighted }:
         </div>
       )}
 
-      {/* Footer: 查看终端 按钮 + (tmux: Stop / ghostty: hint) */}
+      {/* Footer: 查看终端 + 查看汇报 + (tmux: Stop / ghostty: hint) */}
       <div className="pt-2 mt-1 border-t border-border-base/50 flex justify-between items-center gap-2">
-        {/* PR-19c-3: 查看终端 按钮 (所有 kind 都有) */}
-        <button
-          type="button"
-          onClick={() => setViewerOpen(true)}
-          title={t('agents.card.view_terminal')}
-          aria-label={t('agents.card.view_terminal')}
-          className="text-[11px] px-2 py-1 rounded
-                     text-fg-muted hover:text-accent-primary
-                     hover:bg-accent-primary/10 transition
-                     inline-flex items-center gap-1"
-        >
-          <Eye className="w-3 h-3" />
-          {t('agents.card.view_terminal')}
-        </button>
+        <div className="flex items-center gap-1">
+          {/* PR-19c-3: 查看终端 按钮 (所有 kind 都有) */}
+          <button
+            type="button"
+            onClick={() => setViewerOpen(true)}
+            title={t('agents.card.view_terminal')}
+            aria-label={t('agents.card.view_terminal')}
+            className="text-[11px] px-2 py-1 rounded
+                       text-fg-muted hover:text-accent-primary
+                       hover:bg-accent-primary/10 transition
+                       inline-flex items-center gap-1"
+          >
+            <Eye className="w-3 h-3" />
+            {t('agents.card.view_terminal')}
+          </button>
+          {/* PR-20b: 查看汇报 按钮 */}
+          <button
+            type="button"
+            onClick={() => setReportOpen(true)}
+            title={t('agents.card.view_report')}
+            aria-label={t('agents.card.view_report')}
+            className="text-[11px] px-2 py-1 rounded
+                       text-fg-muted hover:text-accent-primary
+                       hover:bg-accent-primary/10 transition
+                       inline-flex items-center gap-1"
+          >
+            <FileText className="w-3 h-3" />
+            {t('agents.card.view_report')}
+          </button>
+        </div>
         {team.kind === 'tmux' ? (
           confirmingStop ? (
             <div className="flex items-center gap-2">
@@ -416,6 +435,10 @@ export function AgentTeamCard({ team, onLabelSaved, onTeamKilled, highlighted }:
           team={team}
           onClose={() => setViewerOpen(false)}
         />
+      )}
+      {/* PR-20b: 查看汇报 modal */}
+      {reportOpen && (
+        <ReportModal teamId={team.id} onClose={() => setReportOpen(false)} />
       )}
     </div>
   );

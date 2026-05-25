@@ -222,14 +222,17 @@ def default_gather_context(team_id: str) -> str:
 def get_report(
     team_id: str,
     *,
-    runner: Callable[..., subprocess.CompletedProcess] = subprocess.run,
+    runner: Optional[Callable[..., subprocess.CompletedProcess]] = None,
     gather_context: Optional[Callable[[str], str]] = None,
     force_refresh: bool = False,
 ) -> ReportResult:
     """读 report 文件; 不存在则用 sonnet fallback 从 pane/jsonl 实时提炼.
 
     ``gather_context=None`` 时**不走 fallback**, 直接返 source=missing.
+    ``runner=None`` 时在调用点 late-resolve 到 ``subprocess.run``, 方便测试 monkeypatch.
     """
+    if runner is None:
+        runner = subprocess.run  # late-bind so monkeypatch(agent_report.subprocess, "run", ...) 能生效
     if not force_refresh:
         with _cache_lock:
             entry = _cache.get(team_id)

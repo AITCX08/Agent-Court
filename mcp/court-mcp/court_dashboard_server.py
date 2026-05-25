@@ -103,6 +103,8 @@ def create_app(
     app.router.add_post("/api/agent/{team_id}/input", handle_agent_input)
     # PR-19c-2: AI summary of pane content
     app.router.add_get("/api/agent/{team_id}/summary", handle_agent_summary)
+    # PR-20b: full report (problem / investigation / solution)
+    app.router.add_get("/api/agent/{team_id}/report", handle_agent_report)
     app.router.add_get("/api/events", handle_events)
     app.router.add_get("/api/auto-review/status", auto_review_status_handler)
     app.router.add_post("/api/approve", handle_approve)
@@ -588,6 +590,51 @@ async def handle_agent_summary(request: web.Request) -> web.Response:
         "team_id": raw,
         "summary": result.summary,
         "sentinel": result.sentinel,
+        "error": result.error,
+        "captured_at": result.captured_at,
+    })
+
+
+# ---------------------------------------------------------------------------
+# PR-20b: /api/agent/{team_id}/report
+# ---------------------------------------------------------------------------
+
+
+async def handle_agent_report(request: web.Request) -> web.Response:
+    """GET /api/agent/{team_id}/report — three-section briefing.
+
+    优先读 ``~/.agent-court/reports/<team_id>.md`` (issue-resolver 4 checkpoint
+    主动写). 文件不在 → Sonnet 4.6 实时从 tmux pane 提炼三段汇报.
+
+    Query: ``force=1`` 跳 30s cache.
+    """
+    raw = request.match_info.get("team_id", "")
+    if not raw:
+        return web.json_response({"error": "team_id is required"}, status=400)
+    team_id = raw[len("tmux:"):] if raw.startswith("tmux:") else raw
+
+    force = request.query.get("force") in ("1", "true", "yes")
+
+    try:
+        from agent_report import default_gather_context, get_report
+        result = await asyncio.to_thread(
+            get_report,
+            team_id,
+            gather_context=default_gather_context,
+            force_refresh=force,
+        )
+    except Exception as exc:
+        return web.json_response({"error": str(exc)}, status=500)
+
+    return web.json_response({
+        "team_id": raw,
+        "problem": result.problem,
+        "investigation": result.investigation,
+        "solution": result.solution,
+        "status": result.status,
+        "phase": result.phase,
+        "updated_at": result.updated_at,
+        "source": result.source,
         "error": result.error,
         "captured_at": result.captured_at,
     })
