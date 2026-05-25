@@ -27,9 +27,22 @@ ISSUE_RESOLVER_BEGIN <repo> <num>
 
 ## 工作流程
 
+**汇报约定 (PR-20d)**: 每完成一个 phase 都要调 `python -m issue_report_writer checkpoint`
+把进度写到 `~/.agent-court/reports/<team_id>.md`. 这是 dashboard "查看汇报" 按钮
+的数据源. `$TEAM_ID` 来自 spawn 时注入的 env var (tmux session name).
+
 ### 1. 审需求
 
 读 issue.json + comments.json + shenli.decision.json.shenli 已经判 GO,你**必要时**才重跑一次复核.若 issue body 在 watcher 抓到之后被人改过且偏离原意,可以拒绝 (走步骤 5 拒绝路径).
+
+**Checkpoint (a)** — 审完需求, 写 problem 段:
+
+```bash
+python -m issue_report_writer checkpoint \
+  --team-id "$TEAM_ID" --issue "<repo>#<num>" \
+  --phase requirements --status investigating \
+  --problem "<3-5 行: 这个 issue 在描述什么, 你理解到的关键约束>"
+```
 
 ### 2. 出实施 plan
 
@@ -52,6 +65,15 @@ ISSUE_RESOLVER_BEGIN <repo> <num>
 ## 验收
 - [ ] 测试通过
 - [ ] ...
+```
+
+**Checkpoint (b)** — plan 写完, 写 solution 段:
+
+```bash
+python -m issue_report_writer checkpoint \
+  --team-id "$TEAM_ID" --issue "<repo>#<num>" \
+  --phase plan --status planning \
+  --solution "<3-5 行: 你打算怎么解, 列关键步骤>"
 ```
 
 ### 3. 二次审批 (阻塞)
@@ -98,6 +120,16 @@ python -m issue_resolver report-back \
   --no-comment
 ```
 
+**Checkpoint (c)** — 实施关键事实/改动收集到位, 更新 investigation + solution:
+
+```bash
+python -m issue_report_writer checkpoint \
+  --team-id "$TEAM_ID" --issue "<repo>#<num>" \
+  --phase execution --status executing \
+  --investigation "<3-5 行: 跑下来你确认了什么 / 改了哪些关键文件>" \
+  --solution "<3-5 行: 已经做了什么 (可在 plan 基础上叠加实际改动)>"
+```
+
 ### 5. 提交 + 推送
 
 按 conventional commits 风格 commit,trailer 必填.例:
@@ -117,6 +149,16 @@ push 时若 pre-push hook 拒绝:
 - 改完 + amend commit + 重新 push
 
 ### 6. 完成回写
+
+**Checkpoint (d)** — 验证通过, finalize 报告 (只更新 frontmatter, 不重写正文):
+
+```bash
+python -m issue_report_writer checkpoint \
+  --team-id "$TEAM_ID" --issue "<repo>#<num>" \
+  --phase verification --status done
+```
+
+然后再调主 report-back:
 
 ```bash
 python -m issue_resolver report-back \
