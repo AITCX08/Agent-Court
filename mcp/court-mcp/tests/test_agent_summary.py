@@ -68,7 +68,13 @@ def test_tmux_happy_path_calls_capture_and_runner():
     assert r.summary == "正在 review PR-37, 跑测试"
     assert r.team_id == "agent-team-abc"
     cap.assert_called_once_with("agent-team-abc", lines=80)
-    assert runner_calls[0][0][:2] == ["codex", "exec"]
+    # PR-20e: 默认 CLI 切到 claude sonnet 4.6 (不带 --bare, 走 OAuth)
+    argv = runner_calls[0][0]
+    assert argv[0] == "claude"
+    assert "-p" in argv
+    assert "--model" in argv
+    assert "claude-sonnet-4-6" in argv
+    assert "--bare" not in argv  # --bare 会要 ANTHROPIC_API_KEY env
     assert "pane content here" in runner_calls[0][1]
 
 
@@ -136,10 +142,10 @@ def test_cli_timeout_returns_error():
 def test_cli_not_found_returns_error():
     cap = MagicMock(return_value="x")
     def fake_run(argv, **kwargs):
-        raise FileNotFoundError("codex")
+        raise FileNotFoundError("claude")
     r = get_summary("agent-team-nocli", capture=cap, runner=fake_run)
     assert r.sentinel == "error"
-    assert "codex" in (r.error or "")
+    assert "claude" in (r.error or "")
 
 
 def test_cli_non_zero_exit_returns_error():

@@ -138,9 +138,9 @@ def test_fallback_calls_claude_when_file_missing(tmp_path, monkeypatch):
     argv = runner.call_args.args[0]
     assert argv[0] == "claude"
     assert "-p" in argv
-    assert "--bare" in argv
     assert "--model" in argv
     assert "claude-sonnet-4-6" in argv
+    assert "--bare" not in argv  # PR-20e: 不带 --bare 才能走 keychain OAuth
 
 
 def test_fallback_returns_missing_when_context_empty(tmp_path, monkeypatch):

@@ -156,8 +156,9 @@ FALLBACK_PROMPT = (
 
 
 def _build_fallback_argv() -> tuple[str, ...]:
+    # PR-20e: 不加 --bare (会跳过 keychain/OAuth 强制要 ANTHROPIC_API_KEY env)
     return (
-        "claude", "-p", "--bare",
+        "claude", "-p",
         "--model", REPORT_FALLBACK_MODEL,
         "--allow-dangerously-skip-permissions",
     )
