@@ -49,6 +49,8 @@ export function ReportModal({ teamId, onClose }: Props) {
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm"
       onClick={(e) => {
+        // 阻止冒泡, 防止外层 <a>/<button> (如 PR-20c 在 PrCard 里) 把点击当卡片导航
+        e.stopPropagation();
         if (e.target === e.currentTarget) onClose();
       }}
     >
