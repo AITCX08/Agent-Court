@@ -177,7 +177,16 @@
       "loading": "Loading messages...",
       "loading_more": "Loading more...",
       "load_more": "Load earlier",
-      "empty": "No messages yet. Send a message in cc-connect to see it here."
+      "empty": "No messages yet. Send a message in cc-connect to see it here.",
+      "search_placeholder": "Search messages...",
+      "no_search_result": "No messages match your search.",
+      "no_reply": "(no reply yet)",
+      "bucket": {
+        "today": "Today",
+        "yesterday": "Yesterday",
+        "this_week": "This week",
+        "earlier": "Earlier"
+      }
     }
   },
   "auto_review": {

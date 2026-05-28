@@ -177,7 +177,16 @@
       "loading": "加载消息中...",
       "loading_more": "加载更多...",
       "load_more": "加载更早的消息",
-      "empty": "暂无消息. 在 cc-connect 接的微信 / 飞书发一条消息这里就能看到."
+      "empty": "暂无消息. 在 cc-connect 接的微信 / 飞书发一条消息这里就能看到.",
+      "search_placeholder": "搜索消息...",
+      "no_search_result": "没有匹配的消息.",
+      "no_reply": "(还没有回复)",
+      "bucket": {
+        "today": "今天",
+        "yesterday": "昨天",
+        "this_week": "本周",
+        "earlier": "更早"
+      }
     }
   },
   "auto_review": {
