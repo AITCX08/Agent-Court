@@ -254,3 +254,50 @@ def test_pair_messages_bad_timestamp_think_seconds_none():
     ex = pair_messages(msgs)
     assert len(ex) == 1
     assert ex[0].think_seconds is None
+
+
+from cc_messages import list_exchanges  # noqa: E402
+
+
+def test_list_exchanges_pairs_and_sorts_desc(tmp_path, monkeypatch):
+    _write_session(tmp_path, "k2work", "s1", [
+        {"role": "user", "content": "q1", "timestamp": "2026-05-10T10:00:00+08:00"},
+        {"role": "assistant", "content": "a1", "timestamp": "2026-05-10T10:00:05+08:00"},
+        {"role": "user", "content": "q2", "timestamp": "2026-05-10T10:01:00+08:00"},
+        {"role": "assistant", "content": "a2", "timestamp": "2026-05-10T10:01:04+08:00"},
+    ])
+    monkeypatch.setattr("cc_messages._resolve_sessions_dir", lambda: tmp_path)
+
+    ex = list_exchanges(limit=10)
+    assert len(ex) == 2
+    # 代表时间降序: q2 对在前
+    assert ex[0].user.content == "q2"
+    assert ex[1].user.content == "q1"
+    assert abs(ex[0].think_seconds - 4.0) < 0.01
+
+
+def test_list_exchanges_respects_limit(tmp_path, monkeypatch):
+    _write_session(tmp_path, "k2work", "s1", [
+        {"role": "user", "content": f"q{i}", "timestamp": f"2026-05-10T10:{i:02d}:00+08:00"}
+        for i in range(6)
+    ])
+    monkeypatch.setattr("cc_messages._resolve_sessions_dir", lambda: tmp_path)
+    ex = list_exchanges(limit=2)
+    assert len(ex) == 2  # 每个 q 都是孤立 user 对
+
+
+def test_list_exchanges_before_cursor(tmp_path, monkeypatch):
+    _write_session(tmp_path, "k2work", "s1", [
+        {"role": "user", "content": f"q{i}", "timestamp": f"2026-05-10T10:0{i}:00+08:00"}
+        for i in range(5)
+    ])
+    monkeypatch.setattr("cc_messages._resolve_sessions_dir", lambda: tmp_path)
+    ex = list_exchanges(limit=10, before="2026-05-10T10:03:00+08:00")
+    contents = [e.user.content for e in ex]
+    assert "q3" not in contents and "q4" not in contents
+    assert "q2" in contents
+
+
+def test_list_exchanges_empty_dir(tmp_path, monkeypatch):
+    monkeypatch.setattr("cc_messages._resolve_sessions_dir", lambda: tmp_path)
+    assert list_exchanges(limit=10) == []
