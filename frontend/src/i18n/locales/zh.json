@@ -14,6 +14,7 @@
     "title": {
       "git_board": "看板",
       "agents": "Agent 团队",
+      "messages": "通信",
       "court_runtime": "Court 运行态"
     },
     "updated_at": "更新于 {{time}}",
@@ -30,6 +31,7 @@
     "menu": {
       "git_board": "Git 看板",
       "agents": "Agent 团队",
+      "messages": "通信",
       "court_runtime": "Court 运行态"
     },
     "collapse": "折叠",
@@ -168,6 +170,15 @@
   },
   "court_runtime": {
     "subtitle": "现有 dashboard 收纳到此菜单. Orchestrator 健康 / 待审批 / Watcher / Receiver / Tmux 都在."
+  },
+  "messages": {
+    "tab": {
+      "title": "通信消息",
+      "loading": "加载消息中...",
+      "loading_more": "加载更多...",
+      "load_more": "加载更早的消息",
+      "empty": "暂无消息. 在 cc-connect 接的微信 / 飞书发一条消息这里就能看到."
+    }
   },
   "auto_review": {
     "state": {

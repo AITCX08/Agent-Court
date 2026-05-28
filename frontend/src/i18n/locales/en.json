@@ -14,6 +14,7 @@
     "title": {
       "git_board": "Board",
       "agents": "Agents",
+      "messages": "Messages",
       "court_runtime": "Court Runtime"
     },
     "updated_at": "Updated {{time}}",
@@ -30,6 +31,7 @@
     "menu": {
       "git_board": "Git Board",
       "agents": "Agents",
+      "messages": "Messages",
       "court_runtime": "Court Runtime"
     },
     "collapse": "Collapse",
@@ -168,6 +170,15 @@
   },
   "court_runtime": {
     "subtitle": "Existing dashboard moved into this menu. Orchestrator health / pending approvals / watcher / receiver / tmux all live here."
+  },
+  "messages": {
+    "tab": {
+      "title": "Communications",
+      "loading": "Loading messages...",
+      "loading_more": "Loading more...",
+      "load_more": "Load earlier",
+      "empty": "No messages yet. Send a message in cc-connect to see it here."
+    }
   },
   "auto_review": {
     "state": {

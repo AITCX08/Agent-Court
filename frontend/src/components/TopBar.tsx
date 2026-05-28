@@ -13,6 +13,7 @@ interface Props {
 const ROUTE_TITLE_KEY: Record<Route, string> = {
   '/git-board': 'topbar.title.git_board',
   '/agents': 'topbar.title.agents',
+  '/messages': 'topbar.title.messages',
   '/court-runtime': 'topbar.title.court_runtime',
 };
 

@@ -5,6 +5,7 @@ import { TopBar } from './TopBar';
 import { GitBoardPage } from './pages/GitBoardPage';
 import { AgentsPage } from './pages/AgentsPage';
 import { CourtRuntimePage } from './pages/CourtRuntimePage';
+import { MessagesPage } from './pages/MessagesPage';
 
 export function AppShell() {
   const [route, setRoute] = useHash();
@@ -20,6 +21,7 @@ export function AppShell() {
         <main className="flex-1 overflow-auto bg-bg-base">
           {route === '/git-board' && <GitBoardPage />}
           {route === '/agents' && <AgentsPage />}
+          {route === '/messages' && <MessagesPage />}
           {route === '/court-runtime' && <CourtRuntimePage />}
         </main>
       </div>

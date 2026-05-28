@@ -3,10 +3,10 @@ import { useEffect, useState, useCallback } from 'react';
 // PR-16a 自写 hash router. 不引 react-router (节省 ~10KB gzip).
 // 唯一 API: useHash() / setHash(). hash 格式: "#/git-board" 之类, 不带 query.
 
-export type Route = '/git-board' | '/agents' | '/court-runtime';
+export type Route = '/git-board' | '/agents' | '/court-runtime' | '/messages';
 
 const DEFAULT_ROUTE: Route = '/git-board';
-const VALID_ROUTES: Route[] = ['/git-board', '/agents', '/court-runtime'];
+const VALID_ROUTES: Route[] = ['/git-board', '/agents', '/court-runtime', '/messages'];
 
 function parseHash(): Route {
   const raw = window.location.hash;

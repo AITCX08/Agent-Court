@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { LayoutGrid, Bot, Activity, ChevronLeft, ChevronRight } from 'lucide-react';
+import { LayoutGrid, Bot, Activity, MessageSquare, ChevronLeft, ChevronRight } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import type { Route } from '../lib/router';
 
@@ -19,6 +19,7 @@ interface MenuItem {
 const MENU: MenuItem[] = [
   { route: '/git-board', labelKey: 'sidebar.menu.git_board', Icon: LayoutGrid },
   { route: '/agents', labelKey: 'sidebar.menu.agents', Icon: Bot },
+  { route: '/messages', labelKey: 'sidebar.menu.messages', Icon: MessageSquare },
   { route: '/court-runtime', labelKey: 'sidebar.menu.court_runtime', Icon: Activity },
 ];
 
