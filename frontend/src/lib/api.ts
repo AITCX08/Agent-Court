@@ -364,3 +364,50 @@ export function getAgentSummary(
     `/api/agent/${encodeURIComponent(teamId)}/summary?${params.join('&')}`,
   );
 }
+
+// PR-21: cc-connect comm messages
+export type CommMessage = {
+  platform: string;       // weixin / feishu / unknown
+  session_key: string;
+  session_id: string;
+  project: string;
+  role: string;           // user / assistant
+  content: string;
+  timestamp: string;
+  msg_id: string;
+};
+
+export type MessagesPage = {
+  messages: CommMessage[];
+};
+
+export function fetchMessages(opts: {
+  limit?: number;
+  before?: string;
+} = {}): Promise<MessagesPage> {
+  const params = new URLSearchParams();
+  if (opts.limit) params.set('limit', String(opts.limit));
+  if (opts.before) params.set('before', opts.before);
+  const qs = params.toString();
+  return call<MessagesPage>('GET', `/api/messages${qs ? '?' + qs : ''}`);
+}
+
+export function subscribeMessages(opts: {
+  onMessage: (m: CommMessage) => void;
+  onError?: (err: Event) => void;
+}): () => void {
+  // EventSource 不支持自定义 header; 后端 token middleware 已经认 ?t= query 兜底
+  const token = getToken();
+  const url = token ? `/api/messages/stream?t=${encodeURIComponent(token)}` : '/api/messages/stream';
+  const es = new EventSource(url);
+  es.onmessage = (ev) => {
+    try {
+      const data: CommMessage = JSON.parse(ev.data);
+      opts.onMessage(data);
+    } catch {
+      // ignore parse errors
+    }
+  };
+  if (opts.onError) es.onerror = opts.onError;
+  return () => es.close();
+}
