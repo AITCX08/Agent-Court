@@ -366,39 +366,60 @@ export function getAgentSummary(
 }
 
 // PR-21: cc-connect comm messages
-export type CommMessage = {
-  platform: string;       // weixin / feishu / unknown
-  session_key: string;
-  session_id: string;
-  project: string;
-  role: string;           // user / assistant
+export type CommMessageLite = {
+  role: string;            // user / assistant
   content: string;
   timestamp: string;
   msg_id: string;
 };
 
-export type MessagesPage = {
-  messages: CommMessage[];
+export type Exchange = {
+  pair_id: string;
+  platform: string;        // weixin / feishu / unknown
+  session_key: string;
+  session_id: string;
+  project: string;
+  user: CommMessageLite | null;
+  assistant: CommMessageLite | null;
+  think_seconds: number | null;
+  timestamp: string;       // 代表时间(排序/分组用)
 };
 
-export function fetchMessages(opts: {
+export type ExchangesPage = {
+  exchanges: Exchange[];
+};
+
+export function fetchExchanges(opts: {
   limit?: number;
   before?: string;
-} = {}): Promise<MessagesPage> {
+} = {}): Promise<ExchangesPage> {
   const params = new URLSearchParams();
   if (opts.limit) params.set('limit', String(opts.limit));
   if (opts.before) params.set('before', opts.before);
   const qs = params.toString();
-  return call<MessagesPage>('GET', `/api/messages${qs ? '?' + qs : ''}`);
+  return call<ExchangesPage>('GET', `/api/messages${qs ? '?' + qs : ''}`);
 }
+
+// SSE 仍推单条 raw message; 前端只用它作"有新消息"信号触发 refetch
+export type CommMessage = {
+  platform: string;
+  session_key: string;
+  session_id: string;
+  project: string;
+  role: string;
+  content: string;
+  timestamp: string;
+  msg_id: string;
+};
 
 export function subscribeMessages(opts: {
   onMessage: (m: CommMessage) => void;
   onError?: (err: Event) => void;
 }): () => void {
-  // EventSource 不支持自定义 header; 后端 token middleware 已经认 ?t= query 兜底
   const token = getToken();
-  const url = token ? `/api/messages/stream?t=${encodeURIComponent(token)}` : '/api/messages/stream';
+  const url = token
+    ? `/api/messages/stream?t=${encodeURIComponent(token)}`
+    : '/api/messages/stream';
   const es = new EventSource(url);
   es.onmessage = (ev) => {
     try {
