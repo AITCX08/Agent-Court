@@ -18,7 +18,9 @@ export function MessagesPage() {
   const [hasMore, setHasMore] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [query, setQuery] = useState('');
-  const [collapsed, setCollapsed] = useState<Set<DateBucket>>(new Set());
+  const [collapsed, setCollapsed] = useState<Set<DateBucket>>(
+    () => new Set<DateBucket>(['this_week', 'earlier']),
+  );
   const refetchTimer = useRef<number | null>(null);
 
   const loadInitial = useCallback(async () => {
