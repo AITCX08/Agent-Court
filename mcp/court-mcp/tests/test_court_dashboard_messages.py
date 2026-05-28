@@ -45,45 +45,47 @@ async def app_client(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_messages_history_returns_recent(tmp_path, app_client):
-    _write_fixture(tmp_path)
+async def test_messages_history_returns_paired_exchanges(tmp_path, app_client):
+    _write_fixture(tmp_path)  # 2 条: user "Hi" + assistant "Hello!"
     resp = await app_client.get("/api/messages",
                                  headers={"Authorization": "Bearer testtoken"})
     assert resp.status == 200
     data = await resp.json()
-    assert "messages" in data
-    assert len(data["messages"]) == 2
-    assert data["messages"][0]["content"] == "Hello!"
-    assert data["messages"][0]["platform"] == "weixin"
+    assert "exchanges" in data
+    assert len(data["exchanges"]) == 1
+    ex = data["exchanges"][0]
+    assert ex["user"]["content"] == "Hi"
+    assert ex["assistant"]["content"] == "Hello!"
+    assert ex["platform"] == "weixin"
+    assert ex["think_seconds"] is not None
 
 
 @pytest.mark.asyncio
 async def test_messages_history_respects_limit(tmp_path, app_client):
     _write_fixture(tmp_path, history=[
-        {"role": "user", "content": f"M{i}", "timestamp": f"2026-05-10T10:00:{i:02d}+08:00"}
+        {"role": "user", "content": f"M{i}", "timestamp": f"2026-05-10T10:0{i}:00+08:00"}
         for i in range(5)
     ])
     resp = await app_client.get("/api/messages?limit=2",
                                  headers={"Authorization": "Bearer testtoken"})
     assert resp.status == 200
     data = await resp.json()
-    assert len(data["messages"]) == 2
+    assert len(data["exchanges"]) == 2
 
 
 @pytest.mark.asyncio
 async def test_messages_history_before_cursor(tmp_path, app_client):
     _write_fixture(tmp_path, history=[
-        {"role": "user", "content": f"M{i}", "timestamp": f"2026-05-10T10:00:{i:02d}+08:00"}
+        {"role": "user", "content": f"M{i}", "timestamp": f"2026-05-10T10:0{i}:00+08:00"}
         for i in range(5)
     ])
     resp = await app_client.get(
-        "/api/messages?before=2026-05-10T10:00:03%2B08:00",
+        "/api/messages?before=2026-05-10T10:03:00%2B08:00",
         headers={"Authorization": "Bearer testtoken"})
     assert resp.status == 200
     data = await resp.json()
-    contents = [m["content"] for m in data["messages"]]
-    assert "M3" not in contents
-    assert "M2" in contents
+    contents = [e["user"]["content"] for e in data["exchanges"] if e["user"]]
+    assert "M3" not in contents and "M2" in contents
 
 
 @pytest.mark.asyncio

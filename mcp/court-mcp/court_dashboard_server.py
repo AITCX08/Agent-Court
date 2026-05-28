@@ -24,7 +24,7 @@ from aiohttp import web
 
 from agent_spawn import AgentSpawner, SpawnError
 from agent_teams import AgentTeamAggregator
-from cc_messages import list_messages, subscribe as cc_subscribe, Message as CcMessage
+from cc_messages import list_exchanges, subscribe as cc_subscribe, Message as CcMessage, Exchange as CcExchange
 # PR-19b-1: freeform agent helpers
 from tmux_pane import capture_pane, send_keys_text, paste_buffer_to_pane, TmuxPaneError
 from dashboard_aggregator import (
@@ -871,7 +871,7 @@ def main(argv: list[str] | None = None) -> int:
 async def handle_messages_history(request: web.Request) -> web.Response:
     """GET /api/messages?limit=50&before=<iso>
 
-    返 cc-connect sessions/*.json 聚合后的消息列表(按 timestamp 降序)。
+    返 cc-connect 消息配对后的 Exchange 列表(按代表时间降序)。
     """
     try:
         limit = int(request.query.get("limit", "50"))
@@ -881,12 +881,12 @@ async def handle_messages_history(request: web.Request) -> web.Response:
     before = request.query.get("before") or None
 
     try:
-        msgs = await asyncio.to_thread(list_messages, limit=limit, before=before)
+        exchanges = await asyncio.to_thread(list_exchanges, limit=limit, before=before)
     except Exception as exc:  # noqa: BLE001
         return web.json_response({"error": str(exc)}, status=500)
 
     return web.json_response({
-        "messages": [_msg_to_dict(m) for m in msgs],
+        "exchanges": [_exchange_to_dict(e) for e in exchanges],
     })
 
 
@@ -919,7 +919,12 @@ async def handle_messages_stream(request: web.Request) -> web.StreamResponse:
         while not request.transport.is_closing():
             try:
                 m = await asyncio.wait_for(queue.get(), timeout=5.0)
-                payload = json.dumps(_msg_to_dict(m), ensure_ascii=False)
+                payload = json.dumps({
+                    "platform": m.platform, "session_key": m.session_key,
+                    "session_id": m.session_id, "project": m.project,
+                    "role": m.role, "content": m.content,
+                    "timestamp": m.timestamp, "msg_id": m.msg_id,
+                }, ensure_ascii=False)
                 await response.write(f"data: {payload}\n\n".encode("utf-8"))
                 last_emit = loop.time()
             except asyncio.TimeoutError:
@@ -934,16 +939,28 @@ async def handle_messages_stream(request: web.Request) -> web.StreamResponse:
     return response
 
 
-def _msg_to_dict(m: CcMessage) -> dict:
+def _msg_lite(m) -> dict | None:
+    if m is None:
+        return None
     return {
-        "platform": m.platform,
-        "session_key": m.session_key,
-        "session_id": m.session_id,
-        "project": m.project,
         "role": m.role,
         "content": m.content,
         "timestamp": m.timestamp,
         "msg_id": m.msg_id,
+    }
+
+
+def _exchange_to_dict(e: CcExchange) -> dict:
+    return {
+        "pair_id": e.pair_id,
+        "platform": e.platform,
+        "session_key": e.session_key,
+        "session_id": e.session_id,
+        "project": e.project,
+        "user": _msg_lite(e.user),
+        "assistant": _msg_lite(e.assistant),
+        "think_seconds": e.think_seconds,
+        "timestamp": e.timestamp,
     }
 
 
