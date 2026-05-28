@@ -86,3 +86,62 @@ def test_parse_session_file_corrupt_json_returns_empty(tmp_path):
     fp.write_text("not json", encoding="utf-8")
     msgs = parse_session_file(fp, project="anything")
     assert msgs == []
+
+
+from cc_messages import list_messages  # noqa: E402
+
+
+def _write_session(tmp_path, project, sid, history, active_key="weixin:dm:u@h"):
+    fp = tmp_path / f"{project}_abc.json"
+    fp.write_text(json.dumps({
+        "sessions": {sid: {"id": sid, "history": history}},
+        "active_session": {active_key: sid},
+        "version": 1,
+    }), encoding="utf-8")
+    return fp
+
+
+def test_list_messages_returns_all_sorted_by_timestamp_desc(tmp_path, monkeypatch):
+    _write_session(tmp_path, "k2work", "s1", [
+        {"role": "user", "content": "A", "timestamp": "2026-05-10T10:00:00+08:00"},
+        {"role": "assistant", "content": "B", "timestamp": "2026-05-10T10:00:05+08:00"},
+    ])
+    _write_session(tmp_path, "persona", "s1", [
+        {"role": "user", "content": "C", "timestamp": "2026-05-10T10:00:03+08:00"},
+    ], active_key="feishu:dm:u@feishu")
+
+    monkeypatch.setattr("cc_messages._resolve_sessions_dir", lambda: tmp_path)
+
+    msgs = list_messages(limit=10)
+    assert [m.content for m in msgs] == ["B", "C", "A"]
+    assert msgs[1].project == "persona"
+    assert msgs[1].platform == "feishu"
+
+
+def test_list_messages_respects_limit(tmp_path, monkeypatch):
+    _write_session(tmp_path, "k2work", "s1", [
+        {"role": "user", "content": f"M{i}", "timestamp": f"2026-05-10T10:00:{i:02d}+08:00"}
+        for i in range(10)
+    ])
+    monkeypatch.setattr("cc_messages._resolve_sessions_dir", lambda: tmp_path)
+
+    msgs = list_messages(limit=3)
+    assert len(msgs) == 3
+    assert [m.content for m in msgs] == ["M9", "M8", "M7"]
+
+
+def test_list_messages_before_cursor(tmp_path, monkeypatch):
+    _write_session(tmp_path, "k2work", "s1", [
+        {"role": "user", "content": f"M{i}", "timestamp": f"2026-05-10T10:00:{i:02d}+08:00"}
+        for i in range(5)
+    ])
+    monkeypatch.setattr("cc_messages._resolve_sessions_dir", lambda: tmp_path)
+
+    msgs = list_messages(limit=10, before="2026-05-10T10:00:03+08:00")
+    assert [m.content for m in msgs] == ["M2", "M1", "M0"]
+
+
+def test_list_messages_empty_dir_returns_empty(tmp_path, monkeypatch):
+    monkeypatch.setattr("cc_messages._resolve_sessions_dir", lambda: tmp_path)
+    msgs = list_messages(limit=10)
+    assert msgs == []

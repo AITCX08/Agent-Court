@@ -91,3 +91,40 @@ def parse_session_file(path: Path, *, project: str) -> list[Message]:
                 msg_id=f"{project}:{sid}:{idx}",
             ))
     return out
+
+
+def _project_from_filename(stem: str) -> Optional[str]:
+    """sessions 文件名格式 '<project>_<hash>.json' → 取 '_' 之前."""
+    if "_" not in stem:
+        return None
+    return stem.split("_", 1)[0]
+
+
+def list_messages(
+    *,
+    limit: int = 50,
+    before: Optional[str] = None,
+) -> list[Message]:
+    """聚合 sessions 目录所有 *.json, 按 timestamp 降序返最多 limit 条。
+
+    Args:
+        limit: 最多返回多少条
+        before: ISO8601 时间字符串, 只返时间戳**严格小于** before 的(用于翻页)
+    """
+    sessions_dir = _resolve_sessions_dir()
+    if not sessions_dir.is_dir():
+        return []
+
+    all_msgs: list[Message] = []
+    for fp in sessions_dir.glob("*.json"):
+        project = _project_from_filename(fp.stem)
+        if not project:
+            continue
+        all_msgs.extend(parse_session_file(fp, project=project))
+
+    all_msgs.sort(key=lambda m: m.timestamp or "", reverse=True)
+
+    if before:
+        all_msgs = [m for m in all_msgs if (m.timestamp or "") < before]
+
+    return all_msgs[:limit]
