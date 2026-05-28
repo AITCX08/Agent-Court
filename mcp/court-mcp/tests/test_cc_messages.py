@@ -145,3 +145,42 @@ def test_list_messages_empty_dir_returns_empty(tmp_path, monkeypatch):
     monkeypatch.setattr("cc_messages._resolve_sessions_dir", lambda: tmp_path)
     msgs = list_messages(limit=10)
     assert msgs == []
+
+
+import time as _time
+
+from cc_messages import subscribe  # noqa: E402
+
+
+def test_subscribe_emits_new_messages_on_file_change(tmp_path, monkeypatch):
+    """文件原 2 条 → modify 成 4 条 → callback 收到 2 条新消息。"""
+    fp = _write_session(tmp_path, "k2work", "s1", [
+        {"role": "user", "content": "A", "timestamp": "2026-05-10T10:00:00+08:00"},
+        {"role": "assistant", "content": "B", "timestamp": "2026-05-10T10:00:05+08:00"},
+    ])
+    monkeypatch.setattr("cc_messages._resolve_sessions_dir", lambda: tmp_path)
+
+    received: list[Message] = []
+    stop = subscribe(callback=lambda m: received.append(m))
+
+    try:
+        _time.sleep(0.3)
+        fp.write_text(json.dumps({
+            "sessions": {"s1": {"id": "s1", "history": [
+                {"role": "user", "content": "A", "timestamp": "2026-05-10T10:00:00+08:00"},
+                {"role": "assistant", "content": "B", "timestamp": "2026-05-10T10:00:05+08:00"},
+                {"role": "user", "content": "C", "timestamp": "2026-05-10T10:00:10+08:00"},
+                {"role": "assistant", "content": "D", "timestamp": "2026-05-10T10:00:15+08:00"},
+            ]}},
+            "active_session": {"weixin:dm:u@h": "s1"},
+            "version": 1,
+        }), encoding="utf-8")
+        _time.sleep(0.8)
+    finally:
+        stop()
+
+    contents = [m.content for m in received]
+    assert "C" in contents
+    assert "D" in contents
+    assert "A" not in contents
+    assert "B" not in contents

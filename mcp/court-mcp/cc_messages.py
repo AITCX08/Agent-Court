@@ -128,3 +128,80 @@ def list_messages(
         all_msgs = [m for m in all_msgs if (m.timestamp or "") < before]
 
     return all_msgs[:limit]
+
+
+try:
+    from watchdog.events import FileSystemEventHandler
+    from watchdog.observers import Observer
+except ImportError:  # pragma: no cover
+    FileSystemEventHandler = object  # type: ignore
+    Observer = None  # type: ignore
+
+
+def subscribe(
+    *,
+    callback: Callable[[Message], None],
+) -> Callable[[], None]:
+    """启动 watchdog 监听 sessions 目录, 每次文件改写都 diff 出新 Message 推给 callback。
+
+    Returns:
+        stop() — 调用以停止 observer
+    """
+    if Observer is None:
+        raise RuntimeError("watchdog not installed")
+
+    sessions_dir = _resolve_sessions_dir()
+    sessions_dir.mkdir(parents=True, exist_ok=True)
+
+    seen: dict[Path, set[str]] = {}
+    lock = threading.Lock()
+
+    for fp in sessions_dir.glob("*.json"):
+        project = _project_from_filename(fp.stem)
+        if not project:
+            continue
+        with lock:
+            seen[fp] = {m.msg_id for m in parse_session_file(fp, project=project)}
+
+    def _handle(fp: Path) -> None:
+        project = _project_from_filename(fp.stem)
+        if not project:
+            return
+        current = parse_session_file(fp, project=project)
+        with lock:
+            seen_ids = seen.setdefault(fp, set())
+            new = [m for m in current if m.msg_id not in seen_ids]
+            for m in new:
+                seen_ids.add(m.msg_id)
+        for m in new:
+            try:
+                callback(m)
+            except Exception as exc:  # noqa: BLE001
+                _log.warning("subscribe callback failed: %s", exc)
+
+    class _Handler(FileSystemEventHandler):
+        def on_modified(self, event):  # type: ignore
+            if event.is_directory:
+                return
+            p = Path(event.src_path)
+            if p.suffix != ".json":
+                return
+            _handle(p)
+
+        def on_created(self, event):  # type: ignore
+            if event.is_directory:
+                return
+            p = Path(event.src_path)
+            if p.suffix != ".json":
+                return
+            _handle(p)
+
+    obs = Observer()
+    obs.schedule(_Handler(), str(sessions_dir), recursive=False)
+    obs.start()
+
+    def stop():
+        obs.stop()
+        obs.join(timeout=2.0)
+
+    return stop
