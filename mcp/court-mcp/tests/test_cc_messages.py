@@ -184,3 +184,73 @@ def test_subscribe_emits_new_messages_on_file_change(tmp_path, monkeypatch):
     assert "D" in contents
     assert "A" not in contents
     assert "B" not in contents
+
+
+from cc_messages import Exchange, pair_messages  # noqa: E402
+
+
+def _msg(role, content, ts, *, project="k2work", sid="s1", idx=0,
+         platform="weixin", skey="weixin:dm:u@h"):
+    return Message(
+        platform=platform, session_key=skey, session_id=sid, project=project,
+        role=role, content=content, timestamp=ts, msg_id=f"{project}:{sid}:{idx}",
+    )
+
+
+def test_pair_messages_pairs_user_then_assistant():
+    msgs = [
+        _msg("user", "问A", "2026-05-10T10:00:00+08:00", idx=0),
+        _msg("assistant", "答A", "2026-05-10T10:00:05+08:00", idx=1),
+    ]
+    ex = pair_messages(msgs)
+    assert len(ex) == 1
+    assert ex[0].user.content == "问A"
+    assert ex[0].assistant.content == "答A"
+    assert ex[0].pair_id == "k2work:s1:0"
+    assert ex[0].timestamp == "2026-05-10T10:00:00+08:00"  # 代表时间=user.ts
+    assert abs(ex[0].think_seconds - 5.0) < 0.01
+
+
+def test_pair_messages_lonely_user_has_no_assistant():
+    msgs = [
+        _msg("user", "问1", "2026-05-10T10:00:00+08:00", idx=0),
+        _msg("user", "问2", "2026-05-10T10:00:03+08:00", idx=1),
+    ]
+    ex = pair_messages(msgs)
+    assert len(ex) == 2
+    assert ex[0].assistant is None
+    assert ex[0].think_seconds is None
+    assert ex[1].user.content == "问2"
+
+
+def test_pair_messages_lonely_assistant():
+    msgs = [_msg("assistant", "主动播报", "2026-05-10T10:00:00+08:00", idx=0)]
+    ex = pair_messages(msgs)
+    assert len(ex) == 1
+    assert ex[0].user is None
+    assert ex[0].assistant.content == "主动播报"
+    assert ex[0].timestamp == "2026-05-10T10:00:00+08:00"  # 代表时间=assistant.ts
+
+
+def test_pair_messages_groups_per_session():
+    msgs = [
+        _msg("user", "s1问", "2026-05-10T10:00:00+08:00", sid="s1", idx=0),
+        _msg("user", "s2问", "2026-05-10T10:00:01+08:00", sid="s2", idx=0),
+        _msg("assistant", "s2答", "2026-05-10T10:00:02+08:00", sid="s2", idx=1),
+    ]
+    ex = pair_messages(msgs)
+    # s1 的 user 不会跟 s2 的 assistant 配对
+    s1 = next(e for e in ex if e.session_id == "s1")
+    assert s1.assistant is None
+    s2 = next(e for e in ex if e.session_id == "s2")
+    assert s2.assistant.content == "s2答"
+
+
+def test_pair_messages_bad_timestamp_think_seconds_none():
+    msgs = [
+        _msg("user", "q", "not-a-date", idx=0),
+        _msg("assistant", "a", "also-bad", idx=1),
+    ]
+    ex = pair_messages(msgs)
+    assert len(ex) == 1
+    assert ex[0].think_seconds is None

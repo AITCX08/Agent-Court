@@ -15,7 +15,9 @@ import json
 import logging
 import os
 import threading
+from collections import defaultdict
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Callable, Optional
 
@@ -128,6 +130,83 @@ def list_messages(
         all_msgs = [m for m in all_msgs if (m.timestamp or "") < before]
 
     return all_msgs[:limit]
+
+
+@dataclass(frozen=True, slots=True)
+class Exchange:
+    pair_id: str
+    platform: str
+    session_key: str
+    session_id: str
+    project: str
+    user: Optional[Message]
+    assistant: Optional[Message]
+    think_seconds: Optional[float]
+    timestamp: str
+
+
+def _think_seconds(user: Optional[Message], assistant: Optional[Message]) -> Optional[float]:
+    if user is None or assistant is None:
+        return None
+    try:
+        u = datetime.fromisoformat(user.timestamp)
+        a = datetime.fromisoformat(assistant.timestamp)
+    except (ValueError, TypeError):
+        return None
+    return (a - u).total_seconds()
+
+
+def _make_exchange(user: Optional[Message], assistant: Optional[Message]) -> Exchange:
+    rep = user or assistant
+    assert rep is not None
+    return Exchange(
+        pair_id=(user.msg_id if user else assistant.msg_id),
+        platform=rep.platform,
+        session_key=rep.session_key,
+        session_id=rep.session_id,
+        project=rep.project,
+        user=user,
+        assistant=assistant,
+        think_seconds=_think_seconds(user, assistant),
+        timestamp=(user.timestamp if user else assistant.timestamp),
+    )
+
+
+def _history_idx(msg_id: str) -> int:
+    # msg_id format: "<project>:<session_id>:<history_index>"; order by index,
+    # not timestamp string (timestamps may be malformed; history order is truth).
+    try:
+        return int(msg_id.rsplit(":", 1)[-1])
+    except (ValueError, IndexError):
+        return 0
+
+
+def pair_messages(msgs: list[Message]) -> list[Exchange]:
+    """把相邻 user->assistant 配成 Exchange. 按 (project, session_id) 分组后组内按 history 顺序配对.
+
+    孤立 user / 孤立 assistant / 连续同 role 各自单独成 Exchange.
+    """
+    by_session: dict[tuple, list[Message]] = defaultdict(list)
+    for m in msgs:
+        by_session[(m.project, m.session_id)].append(m)
+
+    out: list[Exchange] = []
+    for group in by_session.values():
+        group.sort(key=lambda m: _history_idx(m.msg_id))
+        i = 0
+        n = len(group)
+        while i < n:
+            cur = group[i]
+            if cur.role == "user" and i + 1 < n and group[i + 1].role == "assistant":
+                out.append(_make_exchange(cur, group[i + 1]))
+                i += 2
+            elif cur.role == "user":
+                out.append(_make_exchange(cur, None))
+                i += 1
+            else:
+                out.append(_make_exchange(None, cur))
+                i += 1
+    return out
 
 
 try:
