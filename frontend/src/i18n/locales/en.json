@@ -66,7 +66,8 @@
       "kill_agent": "Kill agent",
       "kill_confirm_title": "Kill?",
       "kill_confirm_yes": "Confirm",
-      "kill_confirm_no": "Cancel"
+      "kill_confirm_no": "Cancel",
+      "view_report": "View Report"
     },
     "issues_section": "Issues",
     "no_pr": "No PRs",
@@ -118,7 +119,19 @@
       "terminal_send": "Send",
       "terminal_send_preview": "Will send",
       "terminal_send_failed": "Send failed: {{detail}}",
-      "terminal_options_hint": "Agent listed options — click chips to pick (1 per question); combine with the textarea below if you want (e.g. pick 1a + add free text)"
+      "terminal_options_hint": "Agent listed options — click chips to pick (1 per question); combine with the textarea below if you want (e.g. pick 1a + add free text)",
+      "view_report": "View Report",
+      "view_report_title": "Agent Report",
+      "view_report_loading": "Loading report...",
+      "view_report_missing": "No report yet — agent hasn't reached the first checkpoint, and the tmux pane is empty.",
+      "view_report_fallback_note": "(Live-summarized from terminal content because the agent hasn't written a report file yet.)",
+      "view_report_section_problem": "Problem",
+      "view_report_section_investigation": "Investigation",
+      "view_report_section_solution": "Solution",
+      "view_report_status": "Status",
+      "view_report_phase": "Phase",
+      "view_report_updated_at": "Updated",
+      "view_report_error": "Failed to load report: {{detail}}"
     },
     "empty": "No agents running. Open claude in a ghostty tab and it appears within seconds.",
     "fetch_error": "Failed to load agents: {{detail}}",

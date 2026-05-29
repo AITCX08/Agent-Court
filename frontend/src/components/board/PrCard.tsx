@@ -1,11 +1,12 @@
 import { useState } from 'react';
-import { Sparkles, Bot, X as XIcon } from 'lucide-react';
+import { Sparkles, Bot, FileText, X as XIcon } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { ChipBadge } from './ChipBadge';
 import { AutoReviewBadge } from './AutoReviewBadge';
 import { useStore } from '../../lib/store';
 import { killAgent } from '../../lib/api';
 import { useToast } from '../Toast';
+import { ReportModal } from '../agents/ReportModal';
 import type { BoardCard } from '../../lib/api';
 
 interface Props {
@@ -34,6 +35,8 @@ export function PrCard({ card, onSpawnRequest, onJumpToTeam, onTeamKilled }: Pro
   // PR-19a: 卡片侧关闭 agent — 二次确认 + 调 killAgent
   const [confirmingKill, setConfirmingKill] = useState(false);
   const [killing, setKilling] = useState(false);
+  // PR-20c: view-report modal
+  const [reportOpen, setReportOpen] = useState(false);
 
   const stop = (e: React.MouseEvent | React.SyntheticEvent) => {
     e.stopPropagation();
@@ -124,6 +127,19 @@ export function PrCard({ card, onSpawnRequest, onJumpToTeam, onTeamKilled }: Pro
                 <Bot className="w-3 h-3" />
                 <span className="truncate max-w-[100px]">{card.linked_team.replace('agent-team-', '')}</span>
               </button>
+              {/* PR-20c: 查看汇报 */}
+              <button
+                type="button"
+                onClick={(e) => { stop(e); setReportOpen(true); }}
+                title={t('git_board.card.view_report')}
+                aria-label={t('git_board.card.view_report')}
+                className="w-5 h-5 rounded
+                           text-fg-muted hover:text-accent-primary
+                           hover:bg-accent-primary/10 transition
+                           inline-flex items-center justify-center"
+              >
+                <FileText className="w-3 h-3" />
+              </button>
               <button
                 type="button"
                 onClick={(e) => { stop(e); setConfirmingKill(true); }}
@@ -172,6 +188,10 @@ export function PrCard({ card, onSpawnRequest, onJumpToTeam, onTeamKilled }: Pro
           })}
           {arState && <AutoReviewBadge state={arState} />}
         </div>
+      )}
+      {/* PR-20c: 查看汇报 modal */}
+      {reportOpen && card.linked_team && (
+        <ReportModal teamId={card.linked_team} onClose={() => setReportOpen(false)} />
       )}
     </a>
   );

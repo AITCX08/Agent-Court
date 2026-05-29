@@ -447,3 +447,29 @@ export function subscribeMessages(opts: {
   if (opts.onError) es.onerror = opts.onError;
   return () => es.close();
 }
+
+// PR-20b: agent report
+export interface AgentReport {
+  team_id: string;
+  problem: string;
+  investigation: string;
+  solution: string;
+  status: string;
+  phase: string;
+  updated_at: string;
+  source: 'file' | 'fallback' | 'missing';
+  error: string | null;
+  captured_at: number;
+}
+
+export function getAgentReport(
+  teamId: string,
+  opts: { forceRefresh?: boolean } = {},
+): Promise<AgentReport> {
+  const params: string[] = [`_=${Date.now()}`];
+  if (opts.forceRefresh) params.push('force=1');
+  return call<AgentReport>(
+    'GET',
+    `/api/agent/${encodeURIComponent(teamId)}/report?${params.join('&')}`,
+  );
+}

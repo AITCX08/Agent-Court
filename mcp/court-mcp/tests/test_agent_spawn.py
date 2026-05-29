@@ -241,9 +241,12 @@ def test_spawn_freeform_calls_tmux_new_session_then_claude(monkeypatch):
 
     # tmux new-session 是第 1 个 call
     assert calls[0][0:4] == ["tmux", "new-session", "-d", "-s"]
-    # send-keys claude 第 2 个
+    # PR-20d: export TEAM_ID 第 2 个 call (在 claude 启动前)
     assert calls[1][0:3] == ["tmux", "send-keys", "-t"]
-    assert "claude" in calls[1]
+    assert any("TEAM_ID=agent-team-" in part for part in calls[1])
+    # send-keys claude 第 3 个
+    assert calls[2][0:3] == ["tmux", "send-keys", "-t"]
+    assert "claude" in calls[2]
     # PR-19e: bootstrap 走 set-buffer + paste-buffer 而不是 send-keys -l
     set_buf_calls = [c for c in calls if c[0:2] == ["tmux", "set-buffer"]]
     paste_buf_calls = [c for c in calls if c[0:2] == ["tmux", "paste-buffer"]]
@@ -253,9 +256,9 @@ def test_spawn_freeform_calls_tmux_new_session_then_claude(monkeypatch):
     payload = set_buf_calls[0][-1]
     assert "Freeform Agent Bootstrap" in payload
     assert "P" in payload  # initial_prompt 被替换进去
-    # Enter 提交 paste
+    # Enter 提交 paste (PR-20d 后多一个 Enter for TEAM_ID export = 至少 3)
     enter_calls = [c for c in calls if c[0:2] == ["tmux", "send-keys"] and "Enter" in c]
-    assert len(enter_calls) >= 2  # 一个启 claude 一个提交 bootstrap
+    assert len(enter_calls) >= 3  # TEAM_ID export + 启 claude + 提交 bootstrap
 
 
 def test_spawn_freeform_label_in_result():

@@ -66,7 +66,8 @@
       "kill_agent": "关闭 Agent",
       "kill_confirm_title": "关掉?",
       "kill_confirm_yes": "确认",
-      "kill_confirm_no": "取消"
+      "kill_confirm_no": "取消",
+      "view_report": "查看汇报"
     },
     "issues_section": "Issues",
     "no_pr": "暂无 PR",
@@ -118,7 +119,19 @@
       "terminal_send": "发送",
       "terminal_send_preview": "将发送",
       "terminal_send_failed": "发送失败: {{detail}}",
-      "terminal_options_hint": "Agent 列了选项, 点 chip 一键选; 每题最多 1 个; 可与下方文本框搭配 (例: 选 1a + 文本框写自由文字)"
+      "terminal_options_hint": "Agent 列了选项, 点 chip 一键选; 每题最多 1 个; 可与下方文本框搭配 (例: 选 1a + 文本框写自由文字)",
+      "view_report": "查看汇报",
+      "view_report_title": "Agent 工作汇报",
+      "view_report_loading": "正在加载汇报...",
+      "view_report_missing": "暂无汇报 — Agent 还没跑到第一个 checkpoint, 终端也还没内容.",
+      "view_report_fallback_note": "(Agent 还没写汇报文件, 当前内容由终端实时提炼.)",
+      "view_report_section_problem": "问题描述",
+      "view_report_section_investigation": "调查情况",
+      "view_report_section_solution": "解决方案",
+      "view_report_status": "状态",
+      "view_report_phase": "阶段",
+      "view_report_updated_at": "更新于",
+      "view_report_error": "加载汇报失败: {{detail}}"
     },
     "empty": "目前没有跑着的 agent. 在 ghostty 里手动开 claude 后, 几秒内会自动出现.",
     "fetch_error": "拉取 agent 列表失败: {{detail}}",
