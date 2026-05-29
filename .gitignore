@@ -40,3 +40,6 @@ projects/*/peers.yaml
 **/seen-issues.json
 **/pending-shenli/
 **/gitea-watcher/error-state.json
+
+# Local AI workflow files — never check these in.
+.claude/
