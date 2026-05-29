@@ -365,6 +365,89 @@ export function getAgentSummary(
   );
 }
 
+// PR-21: cc-connect comm messages
+export type CommMessageLite = {
+  role: string;            // user / assistant
+  content: string;
+  timestamp: string;
+  msg_id: string;
+};
+
+export type Exchange = {
+  pair_id: string;
+  platform: string;        // weixin / feishu / unknown
+  session_key: string;
+  session_id: string;
+  project: string;
+  user: CommMessageLite | null;
+  assistant: CommMessageLite | null;
+  think_seconds: number | null;
+  timestamp: string;       // 代表时间(排序/分组用)
+};
+
+export type ExchangesPage = {
+  exchanges: Exchange[];
+};
+
+export function fetchExchanges(opts: {
+  limit?: number;
+  before?: string;
+  platform?: string;
+} = {}): Promise<ExchangesPage> {
+  const params = new URLSearchParams();
+  if (opts.limit) params.set('limit', String(opts.limit));
+  if (opts.before) params.set('before', opts.before);
+  if (opts.platform) params.set('platform', opts.platform);
+  const qs = params.toString();
+  return call<ExchangesPage>('GET', `/api/messages${qs ? '?' + qs : ''}`);
+}
+
+export type PlatformInfo = {
+  platform: string;
+  count: number;
+};
+
+export type PlatformsResponse = {
+  platforms: PlatformInfo[];
+};
+
+export function fetchPlatforms(): Promise<PlatformsResponse> {
+  return call<PlatformsResponse>('GET', '/api/messages/platforms');
+}
+
+// SSE 仍推单条 raw message; 前端只用它作"有新消息"信号触发 refetch
+export type CommMessage = {
+  platform: string;
+  session_key: string;
+  session_id: string;
+  project: string;
+  role: string;
+  content: string;
+  timestamp: string;
+  msg_id: string;
+};
+
+export function subscribeMessages(opts: {
+  onMessage: (m: CommMessage) => void;
+  onError?: (err: Event) => void;
+}): () => void {
+  const token = getToken();
+  const url = token
+    ? `/api/messages/stream?t=${encodeURIComponent(token)}`
+    : '/api/messages/stream';
+  const es = new EventSource(url);
+  es.onmessage = (ev) => {
+    try {
+      const data: CommMessage = JSON.parse(ev.data);
+      opts.onMessage(data);
+    } catch {
+      // ignore parse errors
+    }
+  };
+  if (opts.onError) es.onerror = opts.onError;
+  return () => es.close();
+}
+
 // PR-20b: agent report
 export interface AgentReport {
   team_id: string;

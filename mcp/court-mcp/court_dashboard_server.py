@@ -24,6 +24,7 @@ from aiohttp import web
 
 from agent_spawn import AgentSpawner, SpawnError
 from agent_teams import AgentTeamAggregator
+from cc_messages import list_exchanges, list_platforms, subscribe as cc_subscribe, Message as CcMessage, Exchange as CcExchange
 # PR-19b-1: freeform agent helpers
 from tmux_pane import capture_pane, send_keys_text, paste_buffer_to_pane, TmuxPaneError
 from dashboard_aggregator import (
@@ -110,6 +111,9 @@ def create_app(
     app.router.add_post("/api/approve", handle_approve)
     app.router.add_post("/api/reject", handle_reject)
     app.router.add_post("/api/kill", handle_kill)
+    app.router.add_get("/api/messages", handle_messages_history)
+    app.router.add_get("/api/messages/platforms", handle_messages_platforms)
+    app.router.add_get("/api/messages/stream", handle_messages_stream)
     _add_static_routes(app)
 
     app.on_startup.append(_on_startup)
@@ -905,6 +909,119 @@ def main(argv: list[str] | None = None) -> int:
         _log.exception(event="startup_failed", error=repr(exc))
         return 4
     return 0
+
+
+# ---------------------------------------------------------------------------
+# PR-21: /api/messages — cc-connect 收发消息列表 + SSE 实时流
+# ---------------------------------------------------------------------------
+
+
+async def handle_messages_history(request: web.Request) -> web.Response:
+    """GET /api/messages?limit=50&before=<iso>
+
+    返 cc-connect 消息配对后的 Exchange 列表(按代表时间降序)。
+    """
+    try:
+        limit = int(request.query.get("limit", "50"))
+    except ValueError:
+        return web.json_response({"error": "invalid limit"}, status=400)
+    limit = max(1, min(limit, 500))
+    before = request.query.get("before") or None
+    platform = request.query.get("platform") or None
+
+    try:
+        exchanges = await asyncio.to_thread(list_exchanges, limit=limit, before=before, platform=platform)
+    except Exception as exc:  # noqa: BLE001
+        return web.json_response({"error": str(exc)}, status=500)
+
+    return web.json_response({
+        "exchanges": [_exchange_to_dict(e) for e in exchanges],
+    })
+
+
+async def handle_messages_platforms(request: web.Request) -> web.Response:
+    """GET /api/messages/platforms — 列出有数据的平台 + 每个平台 Exchange 数(count 降序)。"""
+    try:
+        platforms = await asyncio.to_thread(list_platforms)
+    except Exception as exc:  # noqa: BLE001
+        return web.json_response({"error": str(exc)}, status=500)
+    return web.json_response({
+        "platforms": [{"platform": p.platform, "count": p.count} for p in platforms],
+    })
+
+
+async def handle_messages_stream(request: web.Request) -> web.StreamResponse:
+    """GET /api/messages/stream — SSE 实时推送 cc-connect 新消息。"""
+    response = web.StreamResponse(
+        status=200,
+        reason="OK",
+        headers={
+            "Content-Type": "text/event-stream",
+            "Cache-Control": "no-cache, no-transform",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+    await response.prepare(request)
+
+    loop = asyncio.get_event_loop()
+    queue: asyncio.Queue = asyncio.Queue()
+
+    def _on_message(m: CcMessage) -> None:
+        loop.call_soon_threadsafe(queue.put_nowait, m)
+
+    stop = await asyncio.to_thread(cc_subscribe, callback=_on_message)
+
+    last_emit = loop.time()
+    KEEPALIVE_SEC = 25.0
+
+    try:
+        while not request.transport.is_closing():
+            try:
+                m = await asyncio.wait_for(queue.get(), timeout=5.0)
+                payload = json.dumps({
+                    "platform": m.platform, "session_key": m.session_key,
+                    "session_id": m.session_id, "project": m.project,
+                    "role": m.role, "content": m.content,
+                    "timestamp": m.timestamp, "msg_id": m.msg_id,
+                }, ensure_ascii=False)
+                await response.write(f"data: {payload}\n\n".encode("utf-8"))
+                last_emit = loop.time()
+            except asyncio.TimeoutError:
+                if loop.time() - last_emit >= KEEPALIVE_SEC:
+                    await response.write(b": keepalive\n\n")
+                    last_emit = loop.time()
+    except (asyncio.CancelledError, ConnectionResetError):
+        pass
+    finally:
+        await asyncio.to_thread(stop)
+
+    return response
+
+
+def _msg_lite(m) -> dict | None:
+    if m is None:
+        return None
+    return {
+        "role": m.role,
+        "content": m.content,
+        "timestamp": m.timestamp,
+        "msg_id": m.msg_id,
+    }
+
+
+def _exchange_to_dict(e: CcExchange) -> dict:
+    return {
+        "pair_id": e.pair_id,
+        "platform": e.platform,
+        "session_key": e.session_key,
+        "session_id": e.session_id,
+        "project": e.project,
+        "user": _msg_lite(e.user),
+        "assistant": _msg_lite(e.assistant),
+        "think_seconds": e.think_seconds,
+        "timestamp": e.timestamp,
+    }
 
 
 if __name__ == "__main__":

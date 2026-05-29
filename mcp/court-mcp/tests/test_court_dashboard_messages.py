@@ -1,0 +1,187 @@
+"""Integration tests for /api/messages and /api/messages/stream (PR-21b)."""
+from __future__ import annotations
+
+import asyncio
+import json
+import sys
+from pathlib import Path
+
+import pytest
+import pytest_asyncio
+from aiohttp.test_utils import TestClient, TestServer
+
+HERE = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(HERE))
+
+from court_dashboard_server import create_app  # noqa: E402
+
+
+def _write_fixture(tmp_path, project="k2work", history=None):
+    if history is None:
+        history = [
+            {"role": "user", "content": "Hi", "timestamp": "2026-05-10T10:00:00+08:00"},
+            {"role": "assistant", "content": "Hello!", "timestamp": "2026-05-10T10:00:05+08:00"},
+        ]
+    sessions_dir = tmp_path / "sessions"
+    sessions_dir.mkdir(parents=True, exist_ok=True)
+    fp = sessions_dir / f"{project}_abc.json"
+    fp.write_text(json.dumps({
+        "sessions": {"s1": {"id": "s1", "history": history}},
+        "active_session": {"weixin:dm:u@h": "s1"},
+        "version": 1,
+    }), encoding="utf-8")
+    return fp
+
+
+def _write_platform_fixture(tmp_path, project, active_key, history):
+    sessions_dir = tmp_path / "sessions"
+    sessions_dir.mkdir(parents=True, exist_ok=True)
+    fp = sessions_dir / f"{project}_x.json"
+    fp.write_text(json.dumps({
+        "sessions": {"s1": {"id": "s1", "history": history}},
+        "active_session": {active_key: "s1"},
+        "version": 1,
+    }), encoding="utf-8")
+    return fp
+
+
+@pytest_asyncio.fixture
+async def app_client(tmp_path, monkeypatch):
+    monkeypatch.setenv("CC_CONNECT_HOME", str(tmp_path))
+    app = create_app(token="testtoken", state_dir=tmp_path / "state", fs_watcher_enabled=False)
+    server = TestServer(app)
+    client = TestClient(server)
+    await client.start_server()
+    yield client
+    await client.close()
+
+
+@pytest.mark.asyncio
+async def test_messages_history_returns_paired_exchanges(tmp_path, app_client):
+    _write_fixture(tmp_path)  # 2 条: user "Hi" + assistant "Hello!"
+    resp = await app_client.get("/api/messages",
+                                 headers={"Authorization": "Bearer testtoken"})
+    assert resp.status == 200
+    data = await resp.json()
+    assert "exchanges" in data
+    assert len(data["exchanges"]) == 1
+    ex = data["exchanges"][0]
+    assert ex["user"]["content"] == "Hi"
+    assert ex["assistant"]["content"] == "Hello!"
+    assert ex["platform"] == "weixin"
+    assert ex["think_seconds"] is not None
+
+
+@pytest.mark.asyncio
+async def test_messages_history_respects_limit(tmp_path, app_client):
+    _write_fixture(tmp_path, history=[
+        {"role": "user", "content": f"M{i}", "timestamp": f"2026-05-10T10:0{i}:00+08:00"}
+        for i in range(5)
+    ])
+    resp = await app_client.get("/api/messages?limit=2",
+                                 headers={"Authorization": "Bearer testtoken"})
+    assert resp.status == 200
+    data = await resp.json()
+    assert len(data["exchanges"]) == 2
+
+
+@pytest.mark.asyncio
+async def test_messages_history_before_cursor(tmp_path, app_client):
+    _write_fixture(tmp_path, history=[
+        {"role": "user", "content": f"M{i}", "timestamp": f"2026-05-10T10:0{i}:00+08:00"}
+        for i in range(5)
+    ])
+    resp = await app_client.get(
+        "/api/messages?before=2026-05-10T10:03:00%2B08:00",
+        headers={"Authorization": "Bearer testtoken"})
+    assert resp.status == 200
+    data = await resp.json()
+    contents = [e["user"]["content"] for e in data["exchanges"] if e["user"]]
+    assert "M3" not in contents and "M2" in contents
+
+
+@pytest.mark.asyncio
+async def test_messages_history_requires_auth(tmp_path, app_client):
+    _write_fixture(tmp_path)
+    resp = await app_client.get("/api/messages")
+    assert resp.status == 401
+
+
+@pytest.mark.asyncio
+async def test_messages_stream_pushes_new_message(tmp_path, app_client):
+    """初始空 → 写入文件 → SSE 收到新消息事件。"""
+    sessions_dir = tmp_path / "sessions"
+    sessions_dir.mkdir(parents=True, exist_ok=True)
+    fp = sessions_dir / "k2work_abc.json"
+    fp.write_text(json.dumps({
+        "sessions": {"s1": {"id": "s1", "history": []}},
+        "active_session": {"weixin:dm:u@h": "s1"},
+        "version": 1,
+    }), encoding="utf-8")
+
+    async with app_client.get(
+        "/api/messages/stream",
+        headers={"Authorization": "Bearer testtoken"},
+    ) as resp:
+        assert resp.status == 200
+        assert resp.headers["Content-Type"].startswith("text/event-stream")
+
+        await asyncio.sleep(0.5)
+
+        fp.write_text(json.dumps({
+            "sessions": {"s1": {"id": "s1", "history": [
+                {"role": "user", "content": "NEW", "timestamp": "2026-05-10T10:00:00+08:00"},
+            ]}},
+            "active_session": {"weixin:dm:u@h": "s1"},
+            "version": 1,
+        }), encoding="utf-8")
+
+        got_new = False
+        try:
+            async with asyncio.timeout(5.0):
+                async for raw_line in resp.content:
+                    line = raw_line.decode("utf-8").strip()
+                    if line.startswith("data:"):
+                        payload = json.loads(line[len("data:"):].strip())
+                        if payload.get("content") == "NEW":
+                            got_new = True
+                            break
+        except (TimeoutError, asyncio.TimeoutError):
+            pass
+
+        assert got_new, "SSE 未推送新消息"
+
+
+@pytest.mark.asyncio
+async def test_messages_platforms_lists_with_counts(tmp_path, app_client):
+    _write_fixture(tmp_path)  # k2work weixin: Hi+Hello = 1 exchange
+    _write_platform_fixture(tmp_path, "persona", "feishu:dm:u@feishu", [
+        {"role": "user", "content": "F", "timestamp": "2026-05-10T10:00:00+08:00"},
+    ])  # feishu: 1
+    resp = await app_client.get("/api/messages/platforms",
+                                headers={"Authorization": "Bearer testtoken"})
+    assert resp.status == 200
+    data = await resp.json()
+    by = {p["platform"]: p["count"] for p in data["platforms"]}
+    assert by == {"weixin": 1, "feishu": 1}
+
+
+@pytest.mark.asyncio
+async def test_messages_platforms_requires_auth(tmp_path, app_client):
+    _write_fixture(tmp_path)
+    resp = await app_client.get("/api/messages/platforms")
+    assert resp.status == 401
+
+
+@pytest.mark.asyncio
+async def test_messages_history_platform_filter(tmp_path, app_client):
+    _write_fixture(tmp_path)  # weixin Hi/Hello
+    _write_platform_fixture(tmp_path, "persona", "feishu:dm:u@feishu", [
+        {"role": "user", "content": "F", "timestamp": "2026-05-10T10:00:00+08:00"},
+    ])
+    resp = await app_client.get("/api/messages?platform=feishu",
+                                headers={"Authorization": "Bearer testtoken"})
+    assert resp.status == 200
+    data = await resp.json()
+    assert len(data["exchanges"]) == 1
+    assert data["exchanges"][0]["platform"] == "feishu"

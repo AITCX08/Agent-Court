@@ -14,6 +14,7 @@
     "title": {
       "git_board": "Board",
       "agents": "Agents",
+      "messages": "Messages",
       "court_runtime": "Court Runtime"
     },
     "updated_at": "Updated {{time}}",
@@ -30,6 +31,7 @@
     "menu": {
       "git_board": "Git Board",
       "agents": "Agents",
+      "messages": "Messages",
       "court_runtime": "Court Runtime"
     },
     "collapse": "Collapse",
@@ -181,6 +183,30 @@
   },
   "court_runtime": {
     "subtitle": "Existing dashboard moved into this menu. Orchestrator health / pending approvals / watcher / receiver / tmux all live here."
+  },
+  "messages": {
+    "tab": {
+      "title": "Communications",
+      "all": "All",
+      "loading": "Loading messages...",
+      "loading_more": "Loading more...",
+      "load_more": "Load earlier",
+      "empty": "No messages yet. Send a message in cc-connect to see it here.",
+      "search_placeholder": "Search messages...",
+      "no_search_result": "No messages match your search.",
+      "no_reply": "(no reply yet)",
+      "bucket": {
+        "today": "Today",
+        "yesterday": "Yesterday",
+        "this_week": "This week",
+        "earlier": "Earlier"
+      }
+    },
+    "platform": {
+      "weixin": "WeChat",
+      "feishu": "Feishu",
+      "unknown": "Other"
+    }
   },
   "auto_review": {
     "state": {
