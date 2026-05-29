@@ -3,15 +3,21 @@ import { useTranslation } from 'react-i18next';
 import { Loader2, AlertTriangle, MessageSquare } from 'lucide-react';
 import { fetchExchanges, subscribeMessages, type Exchange } from '../../lib/api';
 import { groupByDate, matchSearch, type DateBucket } from '../../lib/messageGrouping';
+import { usePlatforms } from '../../lib/usePlatforms';
 import { ExchangeItem } from '../messages/ExchangeItem';
 import { DateGroupHeader } from '../messages/DateGroupHeader';
 import { MessageSearchBar } from '../messages/MessageSearchBar';
+import { PlatformTabs } from '../messages/PlatformTabs';
 
 const PAGE_SIZE = 50;
 const REFETCH_DEBOUNCE_MS = 600;
 
-export function MessagesPage({ platform }: { platform?: string | null }) {
+export function MessagesPage({ platform, onSelectPlatform }: {
+  platform?: string | null;
+  onSelectPlatform: (p: string | null) => void;
+}) {
   const { t } = useTranslation();
+  const platforms = usePlatforms();
   const [exchanges, setExchanges] = useState<Exchange[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
@@ -108,6 +114,12 @@ export function MessagesPage({ platform }: { platform?: string | null }) {
         )}
         <span className="text-xs text-fg-muted">({filtered.length})</span>
       </header>
+
+      <PlatformTabs
+        platforms={platforms}
+        active={platform ?? null}
+        onSelect={onSelectPlatform}
+      />
 
       <MessageSearchBar value={query} onChange={setQuery} />
 

@@ -15,13 +15,18 @@ export function AppShell() {
 
   return (
     <div className="h-full flex">
-      <Sidebar route={route} platform={platform} onNavigate={setRoute} />
+      <Sidebar route={route} onNavigate={setRoute} />
       <div className="flex-1 flex flex-col min-w-0">
         <TopBar route={route} platform={platform} connected={connected} updatedTs={updatedTs} />
         <main className="flex-1 overflow-auto bg-bg-base">
           {route === '/git-board' && <GitBoardPage />}
           {route === '/agents' && <AgentsPage />}
-          {route === '/messages' && <MessagesPage platform={platform} />}
+          {route === '/messages' && (
+            <MessagesPage
+              platform={platform}
+              onSelectPlatform={(p) => setRoute('/messages', p ?? undefined)}
+            />
+          )}
           {route === '/court-runtime' && <CourtRuntimePage />}
         </main>
       </div>
