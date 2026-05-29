@@ -64,6 +64,11 @@ class AgentSpawner:
         if proc.returncode != 0:
             raise SpawnError(f"tmux new-session failed: {proc.stderr.strip()}")
 
+        # PR-20d: export TEAM_ID 让 issue-resolver skill 调 issue_report_writer 用
+        subprocess.run(
+            ["tmux", "send-keys", "-t", team_id, f"export TEAM_ID={team_id}", "Enter"],
+            capture_output=True, text=True,
+        )
         # send-keys: 启 claude
         subprocess.run(
             ["tmux", "send-keys", "-t", team_id, "claude", "Enter"],
@@ -102,6 +107,7 @@ class AgentSpawner:
 
         team_id = f"agent-team-{_generate_team_uuid()}"
 
+        # tmux new-session -d -s <team_id>
         new_args = ["tmux", "new-session", "-d", "-s", team_id]
         if self.cwd:
             new_args += ["-c", self.cwd]
@@ -109,6 +115,12 @@ class AgentSpawner:
         if proc.returncode != 0:
             raise SpawnError(f"tmux new-session failed: {proc.stderr.strip()}")
 
+        # PR-20d: export TEAM_ID (freeform agent 通常不写 report, 但 env 设上零成本,
+        # 跟 spawn() 行为一致, 便于 agent 自己 invoke issue_report_writer 也行)
+        subprocess.run(
+            ["tmux", "send-keys", "-t", team_id, f"export TEAM_ID={team_id}", "Enter"],
+            capture_output=True, text=True,
+        )
         # Start claude inside the pane
         subprocess.run(
             ["tmux", "send-keys", "-t", team_id, "claude", "Enter"],

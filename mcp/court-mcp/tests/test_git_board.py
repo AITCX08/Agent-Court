@@ -20,7 +20,11 @@ HERE = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(HERE))
 
 import git_board as gb  # noqa: E402
-from gitea_client import GiteaServerError  # noqa: E402
+from gitea_client import (  # noqa: E402
+    GiteaPermissionError,
+    GiteaServerError,
+    GiteaTransportError,
+)
 
 
 def _fake_pr(repo: str, num: int, *, state: str = "open", draft: bool = False,
@@ -250,6 +254,106 @@ async def test_card_includes_linked_team_id(tmp_path):
     agg = gb.GitBoardAggregator(client=client, team_links=links)
     board = await agg.get_board("created")
     assert board["columns"]["reviewing"][0]["linked_team"] == "agent-team-xyz"
+
+
+@pytest.mark.asyncio
+async def test_union_scope_splits_each_boolean_into_own_call():
+    """PR-19g: ``related`` 含 4 个 boolean → 每个 type/state 组合发 4 次 (不是 1 次).
+
+    单 boolean 拆开后各走索引, 避免 Gitea 多 boolean union 慢 / timeout.
+    """
+    client = MagicMock()
+    client.search_issues.return_value = []
+    agg = gb.GitBoardAggregator(client=client)
+    await agg.get_board("related")
+    # 4 boolean × 3 (pulls_open / pulls_closed / issues_open) = 12 次
+    assert client.search_issues.call_count == 12
+    # 每次 call 的 params 里只能有一个 boolean key 为 "true"
+    boolean_keys = ("assigned", "created", "review_requested", "mentioned", "reviewed")
+    for call in client.search_issues.call_args_list:
+        params = call.args[0] if call.args else call.kwargs.get("params", {})
+        count = sum(1 for k in boolean_keys if params.get(k) == "true")
+        assert count == 1, f"expected exactly one boolean key true, got {params}"
+
+
+@pytest.mark.asyncio
+async def test_union_scope_dedupes_by_id():
+    """两个不同 boolean 命中同一条 issue (id 相同), client dedupe 后只保留一份."""
+    client = MagicMock()
+    pr_a = _fake_pr("K2Lab/x", 1, title="dup")
+    pr_a["id"] = 9001
+    pr_a2 = _fake_pr("K2Lab/x", 1, title="dup")  # 同 id, 不同 boolean 命中
+    pr_a2["id"] = 9001
+
+    def fake_search(params: dict) -> list:
+        if params.get("type") != "pulls" or params.get("state") != "open":
+            return []
+        # assigned 和 created 都命中同一个 PR
+        if params.get("assigned") == "true":
+            return [pr_a]
+        if params.get("created") == "true":
+            return [pr_a2]
+        return []
+
+    client.search_issues.side_effect = fake_search
+    agg = gb.GitBoardAggregator(client=client)
+    board = await agg.get_board("related")
+    all_cards = sum((board["columns"][k] for k in ("wip", "under_review", "reviewing", "reviewed")), [])
+    assert len(all_cards) == 1
+    assert all_cards[0]["number"] == 1
+
+
+@pytest.mark.asyncio
+async def test_union_scope_partial_failure_marks_stale_keeps_other_data():
+    """PR-19g: 一个 boolean transient 挂, 其余正常 → stale=True + 保留其他 boolean 的数据."""
+    client = MagicMock()
+    pr_good = _fake_pr("K2Lab/a", 1, title="from-created")
+
+    def fake_search(params: dict) -> list:
+        if params.get("type") != "pulls" or params.get("state") != "open":
+            return []
+        if params.get("assigned") == "true":
+            raise GiteaTransportError("timed out")
+        if params.get("created") == "true":
+            return [pr_good]
+        return []
+
+    client.search_issues.side_effect = fake_search
+    agg = gb.GitBoardAggregator(client=client)
+    board = await agg.get_board("related")
+    assert board["stale"] is True
+    titles = [c["title"] for c in board["columns"]["reviewing"]]
+    assert titles == ["from-created"]  # created 那次成功的数据保留
+
+
+@pytest.mark.asyncio
+async def test_union_scope_all_boolean_fail_raises_for_stale_fallback():
+    """所有 boolean 都 transient 挂 → 抛 GiteaClientError, 让上层走 stale-cache fallback."""
+    client = MagicMock()
+    client.search_issues.side_effect = GiteaTransportError("timed out")
+    agg = gb.GitBoardAggregator(client=client)
+    with pytest.raises(GiteaTransportError):
+        await agg.get_board("related")
+
+
+@pytest.mark.asyncio
+async def test_union_scope_non_transient_error_not_swallowed():
+    """403 等确定性错误不该被 partial-failure 容错吞掉 (是真 bug 不是抖动)."""
+    client = MagicMock()
+    client.search_issues.side_effect = GiteaPermissionError("bad scope")
+    agg = gb.GitBoardAggregator(client=client)
+    with pytest.raises(GiteaPermissionError):
+        await agg.get_board("related")
+
+
+@pytest.mark.asyncio
+async def test_single_boolean_scope_not_split():
+    """``created`` (单 boolean) 不拆, 3 次 (pulls_open/closed + issues_open) 跟之前一样."""
+    client = MagicMock()
+    client.search_issues.return_value = []
+    agg = gb.GitBoardAggregator(client=client)
+    await agg.get_board("created")
+    assert client.search_issues.call_count == 3
 
 
 @pytest.mark.asyncio

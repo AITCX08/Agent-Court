@@ -24,6 +24,10 @@
 PR-16b MVP **不调 reviews endpoint** (每个 PR 一次 N+1 太贵), 4 列分类用 search
 响应里 ``draft`` / ``requested_reviewers`` / ``state`` / ``merged_at`` 字段做粗判.
 PR-16c 可加 review fetch 改成精分类.
+
+PR-19g: ``related`` / ``all`` 这种 union scope (3+ boolean filter OR 在一起)
+在 Gitea 侧搜索极慢, 10s 默认 timeout 经常打挂. 改成在客户端拆: 多 boolean
+union 时, 每个 boolean 独立发一次, 按 issue ``id`` 在客户端 dedupe.
 """
 from __future__ import annotations
 
@@ -33,11 +37,20 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
 
-from gitea_client import GiteaClient, GiteaClientError
+from gitea_client import (
+    GiteaClient,
+    GiteaClientError,
+    GiteaRateLimitError,
+    GiteaServerError,
+    GiteaTransportError,
+)
 
 
 CACHE_TTL_SECONDS = 30.0
 REVIEWED_WINDOW_DAYS = 7
+# 看板专属 timeout. default GiteaClient 10s 在 union scope 12 次串行里偶发挂;
+# 这里只影响看板, auto-review / watcher 仍走 10s.
+BOARD_GITEA_TIMEOUT = 30.0
 
 # 6 scope → search params 映射. 全部用 boolean filter (不依赖 username/whoami).
 # Gitea API 接受多个 boolean 同时 = OR (拉所有命中至少一个的). plan §4.2 写的
@@ -94,7 +107,7 @@ class GitBoardAggregator:
     def __init__(self, client: GiteaClient | None = None, *,
                  ttl: float = CACHE_TTL_SECONDS,
                  team_links: "TeamLinks | None" = None) -> None:
-        self._client = client or GiteaClient()
+        self._client = client or GiteaClient(timeout=BOARD_GITEA_TIMEOUT)
         self._ttl = ttl
         if team_links is None:
             from team_links import TeamLinks
@@ -139,12 +152,79 @@ class GitBoardAggregator:
     # 采集
     # ------------------------------------------------------------------
 
+    # Gitea search 支持的 boolean filter key 集合 (跟 _SCOPE_PARAMS 一致).
+    _BOOLEAN_KEYS = ("assigned", "created", "review_requested", "mentioned", "reviewed")
+
+    # 哪些错算"瞬态可跳过": 网络超时 / 服务器 5xx / 限流. 401/403/404/422
+    # 是确定性 bug, 必须冒泡 (不应静默吞).
+    _TRANSIENT_ERRORS = (GiteaTransportError, GiteaServerError, GiteaRateLimitError)
+
+    def _search_union(
+        self, type_: str, state: str, scope_params: dict[str, str],
+    ) -> tuple[list[dict[str, Any]], bool]:
+        """串行 fan-out: scope 含 2+ 个 boolean 时, 每个 boolean 单发一次, 客户端 dedupe.
+
+        Gitea ``/repos/issues/search`` 把多个 boolean OR 在一起时, 后端 SQL plan
+        会爆 (实测 4 个 boolean + state=open 10s 超时). 拆开后每发只有 1 个
+        boolean, 各自走索引, 总耗时反而更短.
+
+        - ``scope_params`` 只能含 boolean key (来自 ``_SCOPE_PARAMS[scope]``);
+          ``type`` / ``state`` 由参数显式指定避免被覆盖.
+        - 单 boolean (created / assigned / participating) 保持原行为, 不拆.
+        - dedupe by ``id`` (Gitea 全局唯一 issue id), 测试 fixture 缺 id 时回落
+          到 ``html_url``.
+        - partial-failure 容错: 多 boolean 时, 单个 boolean 子请求 transient
+          失败 (timeout / 5xx / rate-limit) → 跳过该 boolean 继续, 返回 ok=False;
+          所有 boolean 都失败才 raise (让上层走 stale-cache fallback).
+
+        Returns:
+            (items, ok) — ok=False 意味某个 boolean 被跳过 (数据不完整).
+        """
+        boolean_keys = [k for k in self._BOOLEAN_KEYS if scope_params.get(k) == "true"]
+        # 把 boolean key 之外的 (理论上没有, 防御性写法) 也带上, 类型/状态用参数覆盖
+        carry = {k: v for k, v in scope_params.items() if k not in self._BOOLEAN_KEYS}
+        base = {**carry, "type": type_, "state": state}
+
+        if len(boolean_keys) <= 1:
+            params = dict(base)
+            for k in boolean_keys:
+                params[k] = "true"
+            return self._client.search_issues(params), True
+
+        seen_keys: set[Any] = set()
+        out: list[dict[str, Any]] = []
+        success_count = 0
+        last_transient: Exception | None = None
+        for bk in boolean_keys:
+            params = dict(base)
+            params[bk] = "true"
+            try:
+                items = self._client.search_issues(params)
+            except self._TRANSIENT_ERRORS as exc:
+                last_transient = exc
+                continue
+            success_count += 1
+            for item in items:
+                # 真实 Gitea response 一定有 id; 测试 fixture 可能没设, 回落到
+                # html_url (Gitea 也保证 URL 唯一)
+                key = item.get("id") or item.get("html_url")
+                if key is None or key in seen_keys:
+                    continue
+                seen_keys.add(key)
+                out.append(item)
+
+        if success_count == 0:
+            assert last_transient is not None  # boolean_keys 非空 → 至少 1 次尝试
+            raise last_transient
+        return out, success_count == len(boolean_keys)
+
     def _collect(self, scope: str) -> dict[str, Any]:
         params_base = dict(_SCOPE_PARAMS[scope])
         # 跟 plan §4.2 一致: PR 列查 open + closed-recent; issue 行只查 open
-        pulls_open = self._client.search_issues({**params_base, "type": "pulls", "state": "open"})
-        pulls_closed = self._client.search_issues({**params_base, "type": "pulls", "state": "closed"})
-        issues_open = self._client.search_issues({**params_base, "type": "issues", "state": "open"})
+        pulls_open, ok_open = self._search_union("pulls", "open", params_base)
+        pulls_closed, ok_closed = self._search_union("pulls", "closed", params_base)
+        issues_open, ok_issues = self._search_union("issues", "open", params_base)
+        all_ok = ok_open and ok_closed and ok_issues
 
         def _attach_link(card_dict: dict[str, Any], kind: str) -> None:
             team_id = self._team_links.lookup_by_target(kind, card_dict["repo"], card_dict["number"])
@@ -216,7 +296,9 @@ class GitBoardAggregator:
         return {
             "scope": scope,
             "updated_at": _utc_now_iso(),
-            "stale": False,
+            # union scope 任一 boolean 子请求 transient 失败 → stale=True 提示
+            # 前端 (前端已渲染 "Stale" 标签). 完整成功才 stale=False.
+            "stale": not all_ok,
             "columns": columns,
             "issues_row": issues_row,
         }

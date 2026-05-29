@@ -1,23 +1,30 @@
-"""PR-19c-2 / PR-19d: AI summary for agent team panes.
+"""PR-19c-2 / PR-19d / PR-20e: AI summary for agent team panes.
 
 两条来源:
 
 - **tmux** (dashboard-spawned 或用户手动 tmux new-session): tmux capture-pane
-  拿最近 stdout, 喂给 codex/claude CLI 摘要.
+  拿最近 stdout, 喂给 claude (sonnet 4.6) 摘要.
 
 - **ghostty** (用户在 ghostty terminal 里手动跑 claude): 后端没法直接 capture
   ghostty buffer, 但 claude 把 session 写在 ``~/.claude/projects/<cwd>/<uuid>.jsonl``.
   通过 PID → cwd (ps) → projects 目录 → 找 mtime 最新的 jsonl → 读最后 N 条
-  message, 喂给 codex 摘要. 多 claude 跑同 cwd 时不能精准对应, 用 mtime 最新当
-  近似.
+  message, 喂给 claude sonnet 摘要. 多 claude 跑同 cwd 时不能精准对应, 用 mtime
+  最新当近似.
 
 降级链 (ghostty 任意步骤失败):
 1. lsof / ps 拿不到 cwd → SummaryResult.sentinel='ghostty-no-cwd'
 2. cwd 转义目录里没 jsonl → SummaryResult.sentinel='ghostty-no-session'
 3. jsonl 解析全失败 / 内容空 → SummaryResult.sentinel='ghostty-no-content'
-4. codex CLI 失败 → SummaryResult.sentinel='error' + error 字段
+4. claude CLI 失败 → SummaryResult.sentinel='error' + error 字段
 
 30s 内存 cache 避免每次 dashboard 刷都打 API.
+
+PR-20e: 默认 cli_argv 从 ("codex", "exec") → ("claude", "-p", "--model",
+"claude-sonnet-4-6", "--allow-dangerously-skip-permissions"). 把所有"整理概括"
+场景统一到 sonnet 4.6.
+
+注意: 不加 ``--bare`` flag. ``--bare`` 会跳过 keychain/OAuth 强制要
+ANTHROPIC_API_KEY env, 但用户本地是通过 claude.ai OAuth 登录, 没设 env.
 """
 from __future__ import annotations
 
@@ -229,7 +236,11 @@ def get_summary(
     runner: Callable[..., subprocess.CompletedProcess] = subprocess.run,
     capture: Callable[..., str] = capture_pane,
     now: Callable[[], float] = _now,
-    cli_argv: tuple[str, ...] = ("codex", "exec"),
+    cli_argv: tuple[str, ...] = (
+        "claude", "-p",
+        "--model", "claude-sonnet-4-6",
+        "--allow-dangerously-skip-permissions",
+    ),
     force_refresh: bool = False,
     claude_root: Path | None = None,
 ) -> SummaryResult:
