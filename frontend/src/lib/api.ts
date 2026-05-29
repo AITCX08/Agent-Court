@@ -392,12 +392,27 @@ export type ExchangesPage = {
 export function fetchExchanges(opts: {
   limit?: number;
   before?: string;
+  platform?: string;
 } = {}): Promise<ExchangesPage> {
   const params = new URLSearchParams();
   if (opts.limit) params.set('limit', String(opts.limit));
   if (opts.before) params.set('before', opts.before);
+  if (opts.platform) params.set('platform', opts.platform);
   const qs = params.toString();
   return call<ExchangesPage>('GET', `/api/messages${qs ? '?' + qs : ''}`);
+}
+
+export type PlatformInfo = {
+  platform: string;
+  count: number;
+};
+
+export type PlatformsResponse = {
+  platforms: PlatformInfo[];
+};
+
+export function fetchPlatforms(): Promise<PlatformsResponse> {
+  return call<PlatformsResponse>('GET', '/api/messages/platforms');
 }
 
 // SSE 仍推单条 raw message; 前端只用它作"有新消息"信号触发 refetch
