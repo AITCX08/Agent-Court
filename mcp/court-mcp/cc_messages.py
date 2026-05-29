@@ -209,33 +209,57 @@ def pair_messages(msgs: list[Message]) -> list[Exchange]:
     return out
 
 
-def list_exchanges(
-    *,
-    limit: int = 50,
-    before: Optional[str] = None,
-) -> list[Exchange]:
-    """聚合 sessions 目录所有消息, 配对成 Exchange, 按代表时间降序返最多 limit 个.
-
-    before: 只返代表时间严格小于 before 的(翻页).
-    """
+def _load_all_exchanges() -> list[Exchange]:
+    """glob sessions 目录所有 *.json, 解析 + 配对成 Exchange(未排序)。"""
     sessions_dir = _resolve_sessions_dir()
     if not sessions_dir.is_dir():
         return []
-
     all_msgs: list[Message] = []
     for fp in sessions_dir.glob("*.json"):
         project = _project_from_filename(fp.stem)
         if not project:
             continue
         all_msgs.extend(parse_session_file(fp, project=project))
+    return pair_messages(all_msgs)
 
-    exchanges = pair_messages(all_msgs)
+
+def list_exchanges(
+    *,
+    limit: int = 50,
+    before: Optional[str] = None,
+    platform: Optional[str] = None,
+) -> list[Exchange]:
+    """聚合 sessions 目录所有消息, 配对成 Exchange, 按代表时间降序返最多 limit 个.
+
+    platform: 只返该平台的 Exchange(None = 全部).
+    before: 只返代表时间严格小于 before 的(翻页).
+    """
+    exchanges = _load_all_exchanges()
+    if platform:
+        exchanges = [e for e in exchanges if e.platform == platform]
     exchanges.sort(key=lambda e: e.timestamp or "", reverse=True)
 
     if before:
         exchanges = [e for e in exchanges if (e.timestamp or "") < before]
 
     return exchanges[:limit]
+
+
+@dataclass(frozen=True, slots=True)
+class PlatformInfo:
+    platform: str
+    count: int
+
+
+def list_platforms() -> list[PlatformInfo]:
+    """统计每个 platform 的 Exchange 数量, 按 count 降序(同 count 按平台名升序)。"""
+    counts: dict[str, int] = defaultdict(int)
+    for e in _load_all_exchanges():
+        counts[e.platform] += 1
+    return [
+        PlatformInfo(platform=p, count=c)
+        for p, c in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))
+    ]
 
 
 try:

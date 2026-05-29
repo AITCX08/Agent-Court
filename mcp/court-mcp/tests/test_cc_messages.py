@@ -301,3 +301,45 @@ def test_list_exchanges_before_cursor(tmp_path, monkeypatch):
 def test_list_exchanges_empty_dir(tmp_path, monkeypatch):
     monkeypatch.setattr("cc_messages._resolve_sessions_dir", lambda: tmp_path)
     assert list_exchanges(limit=10) == []
+
+
+from cc_messages import list_platforms, PlatformInfo  # noqa: E402
+
+
+def test_list_platforms_counts_per_platform(tmp_path, monkeypatch):
+    _write_session(tmp_path, "k2work", "s1", [
+        {"role": "user", "content": "q1", "timestamp": "2026-05-10T10:00:00+08:00"},
+        {"role": "assistant", "content": "a1", "timestamp": "2026-05-10T10:00:05+08:00"},
+        {"role": "user", "content": "q2", "timestamp": "2026-05-10T10:01:00+08:00"},
+    ])  # weixin: 1 paired + 1 lonely = 2 exchanges
+    _write_session(tmp_path, "persona", "s1", [
+        {"role": "user", "content": "f1", "timestamp": "2026-05-10T10:02:00+08:00"},
+    ], active_key="feishu:dm:u@feishu")  # feishu: 1
+    monkeypatch.setattr("cc_messages._resolve_sessions_dir", lambda: tmp_path)
+
+    plats = list_platforms()
+    by = {p.platform: p.count for p in plats}
+    assert by == {"weixin": 2, "feishu": 1}
+    assert isinstance(plats[0], PlatformInfo)
+    assert plats[0].platform == "weixin"  # count 降序, weixin(2) 在前
+
+
+def test_list_platforms_empty_dir(tmp_path, monkeypatch):
+    monkeypatch.setattr("cc_messages._resolve_sessions_dir", lambda: tmp_path)
+    assert list_platforms() == []
+
+
+def test_list_exchanges_filter_by_platform(tmp_path, monkeypatch):
+    _write_session(tmp_path, "k2work", "s1", [
+        {"role": "user", "content": "wx", "timestamp": "2026-05-10T10:00:00+08:00"},
+    ])  # weixin
+    _write_session(tmp_path, "persona", "s1", [
+        {"role": "user", "content": "fs", "timestamp": "2026-05-10T10:01:00+08:00"},
+    ], active_key="feishu:dm:u@feishu")  # feishu
+    monkeypatch.setattr("cc_messages._resolve_sessions_dir", lambda: tmp_path)
+
+    wx = list_exchanges(limit=10, platform="weixin")
+    assert [e.user.content for e in wx] == ["wx"]
+    fs = list_exchanges(limit=10, platform="feishu")
+    assert [e.user.content for e in fs] == ["fs"]
+    assert len(list_exchanges(limit=10)) == 2  # 不传 platform = 全部
