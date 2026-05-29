@@ -33,6 +33,18 @@ def _write_fixture(tmp_path, project="k2work", history=None):
     return fp
 
 
+def _write_platform_fixture(tmp_path, project, active_key, history):
+    sessions_dir = tmp_path / "sessions"
+    sessions_dir.mkdir(parents=True, exist_ok=True)
+    fp = sessions_dir / f"{project}_x.json"
+    fp.write_text(json.dumps({
+        "sessions": {"s1": {"id": "s1", "history": history}},
+        "active_session": {active_key: "s1"},
+        "version": 1,
+    }), encoding="utf-8")
+    return fp
+
+
 @pytest_asyncio.fixture
 async def app_client(tmp_path, monkeypatch):
     monkeypatch.setenv("CC_CONNECT_HOME", str(tmp_path))
@@ -138,3 +150,38 @@ async def test_messages_stream_pushes_new_message(tmp_path, app_client):
             pass
 
         assert got_new, "SSE 未推送新消息"
+
+
+@pytest.mark.asyncio
+async def test_messages_platforms_lists_with_counts(tmp_path, app_client):
+    _write_fixture(tmp_path)  # k2work weixin: Hi+Hello = 1 exchange
+    _write_platform_fixture(tmp_path, "persona", "feishu:dm:u@feishu", [
+        {"role": "user", "content": "F", "timestamp": "2026-05-10T10:00:00+08:00"},
+    ])  # feishu: 1
+    resp = await app_client.get("/api/messages/platforms",
+                                headers={"Authorization": "Bearer testtoken"})
+    assert resp.status == 200
+    data = await resp.json()
+    by = {p["platform"]: p["count"] for p in data["platforms"]}
+    assert by == {"weixin": 1, "feishu": 1}
+
+
+@pytest.mark.asyncio
+async def test_messages_platforms_requires_auth(tmp_path, app_client):
+    _write_fixture(tmp_path)
+    resp = await app_client.get("/api/messages/platforms")
+    assert resp.status == 401
+
+
+@pytest.mark.asyncio
+async def test_messages_history_platform_filter(tmp_path, app_client):
+    _write_fixture(tmp_path)  # weixin Hi/Hello
+    _write_platform_fixture(tmp_path, "persona", "feishu:dm:u@feishu", [
+        {"role": "user", "content": "F", "timestamp": "2026-05-10T10:00:00+08:00"},
+    ])
+    resp = await app_client.get("/api/messages?platform=feishu",
+                                headers={"Authorization": "Bearer testtoken"})
+    assert resp.status == 200
+    data = await resp.json()
+    assert len(data["exchanges"]) == 1
+    assert data["exchanges"][0]["platform"] == "feishu"
