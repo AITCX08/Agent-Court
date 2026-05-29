@@ -187,6 +187,11 @@
         "this_week": "This week",
         "earlier": "Earlier"
       }
+    },
+    "platform": {
+      "weixin": "WeChat",
+      "feishu": "Feishu",
+      "unknown": "Other"
     }
   },
   "auto_review": {

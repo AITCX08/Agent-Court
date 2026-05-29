@@ -10,7 +10,7 @@ import { MessageSearchBar } from '../messages/MessageSearchBar';
 const PAGE_SIZE = 50;
 const REFETCH_DEBOUNCE_MS = 600;
 
-export function MessagesPage() {
+export function MessagesPage({ platform }: { platform?: string | null }) {
   const { t } = useTranslation();
   const [exchanges, setExchanges] = useState<Exchange[]>([]);
   const [loading, setLoading] = useState(true);
@@ -27,7 +27,7 @@ export function MessagesPage() {
     setLoading(true);
     setError(null);
     try {
-      const page = await fetchExchanges({ limit: PAGE_SIZE });
+      const page = await fetchExchanges({ limit: PAGE_SIZE, platform: platform ?? undefined });
       setExchanges(page.exchanges);
       setHasMore(page.exchanges.length >= PAGE_SIZE);
     } catch (e) {
@@ -35,14 +35,14 @@ export function MessagesPage() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [platform]);
 
   const loadMore = useCallback(async () => {
     if (loadingMore || !hasMore || exchanges.length === 0) return;
     setLoadingMore(true);
     try {
       const oldest = exchanges[exchanges.length - 1];
-      const page = await fetchExchanges({ limit: PAGE_SIZE, before: oldest.timestamp });
+      const page = await fetchExchanges({ limit: PAGE_SIZE, before: oldest.timestamp, platform: platform ?? undefined });
       setExchanges((cur) => {
         const seen = new Set(cur.map((e) => e.pair_id));
         return [...cur, ...page.exchanges.filter((e) => !seen.has(e.pair_id))];
@@ -53,7 +53,7 @@ export function MessagesPage() {
     } finally {
       setLoadingMore(false);
     }
-  }, [exchanges, loadingMore, hasMore]);
+  }, [exchanges, loadingMore, hasMore, platform]);
 
   useEffect(() => {
     loadInitial();
@@ -65,7 +65,7 @@ export function MessagesPage() {
       onMessage: () => {
         if (refetchTimer.current) window.clearTimeout(refetchTimer.current);
         refetchTimer.current = window.setTimeout(() => {
-          fetchExchanges({ limit: PAGE_SIZE })
+          fetchExchanges({ limit: PAGE_SIZE, platform: platform ?? undefined })
             .then((page) => {
               setExchanges((cur) => {
                 const seen = new Set(cur.map((e) => e.pair_id));
@@ -81,7 +81,7 @@ export function MessagesPage() {
       if (refetchTimer.current) window.clearTimeout(refetchTimer.current);
       unsub();
     };
-  }, []);
+  }, [platform]);
 
   const filtered = useMemo(
     () => exchanges.filter((e) => matchSearch(e, query)),
@@ -101,6 +101,11 @@ export function MessagesPage() {
       <header className="px-4 py-3 border-b border-border-base flex items-center gap-2">
         <MessageSquare className="w-4 h-4 text-fg-secondary" />
         <h1 className="text-sm font-semibold text-fg-primary">{t('messages.tab.title')}</h1>
+        {platform && (
+          <span className="text-xs text-fg-secondary">
+            · {t(`messages.platform.${platform}`, { defaultValue: platform })}
+          </span>
+        )}
         <span className="text-xs text-fg-muted">({filtered.length})</span>
       </header>
 

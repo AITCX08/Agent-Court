@@ -187,6 +187,11 @@
         "this_week": "本周",
         "earlier": "更早"
       }
+    },
+    "platform": {
+      "weixin": "微信",
+      "feishu": "飞书",
+      "unknown": "其他"
     }
   },
   "auto_review": {

@@ -6,6 +6,7 @@ import type { Route } from '../lib/router';
 
 interface Props {
   route: Route;
+  platform?: string | null;
   connected: boolean;
   updatedTs: number | null;
 }
@@ -23,7 +24,7 @@ function formatTime(ts: number | null): string {
   return d.toLocaleTimeString(undefined, { hour12: false });
 }
 
-export function TopBar({ route, connected, updatedTs }: Props) {
+export function TopBar({ route, platform, connected, updatedTs }: Props) {
   const { t } = useTranslation();
   // 每秒重渲染一次, 让 updatedTs 显示能跟 SSE 不一致时也能动
   const [, setTick] = useState(0);
@@ -37,6 +38,9 @@ export function TopBar({ route, connected, updatedTs }: Props) {
                        flex items-center px-5 gap-4">
       <h1 className="text-sm font-medium text-fg-primary">
         {t(ROUTE_TITLE_KEY[route])}
+        {route === '/messages' && platform
+          ? ` · ${t(`messages.platform.${platform}`, { defaultValue: platform })}`
+          : ''}
       </h1>
       <span className="text-xs text-fg-muted">
         {t('topbar.updated_at', { time: formatTime(updatedTs) })}
